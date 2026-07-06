@@ -7,10 +7,6 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-# ---------------------------------------------------------------------------
-# Visual stuff - edit here to restyle the sheet if you want
-# ---------------------------------------------------------------------------
-
 # One hex color per period label; add entries for new periods as needed.
 PREFERRED_PERIOD_COLOURS: dict[str, str] = {
     "p16": "4472C4",  # blue
