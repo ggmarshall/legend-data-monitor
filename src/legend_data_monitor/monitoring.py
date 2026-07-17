@@ -1493,6 +1493,8 @@ def get_calib_data_dict(
 
     # find first key of current run
     run_path = os.path.join(tiers[2 if tier == "hit" else 3], data_type, period, run)
+    if not os.path.exists(run_path):
+        return calib_data
     start_key = sorted(os.listdir(run_path))[0].split("-")[4]
     # use key to load the right yaml file
     valid_entries = [e for e in validity_dict if e["valid_from"] <= start_key]
@@ -1765,7 +1767,7 @@ def get_dfs(phy_mtg_data: str, period: str, run_list: list, parameter: str):
 
     base_dir = os.path.join(phy_mtg_data, period)
     runs = os.listdir(base_dir)
-    runs = [r for r in runs if "old" not in r]
+    runs = [r for r in runs if re.fullmatch(r"r\d{3}", r)]
 
     for r in runs:
         if r not in run_list:

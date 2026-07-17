@@ -70,10 +70,17 @@ def auto_run(
     period = (
         search_latest_folder(search_directory) if input_period is None else input_period
     )
-    # Run to monitor
     search_directory = os.path.join(search_directory, period)
+    if not os.path.isdir(search_directory):
+        utils.logger.error(f"Period directory does not exist: {search_directory}")
+        return
+
+    # Run to monitor
     run = search_latest_folder(search_directory) if input_run is None else input_run
     source_dir = os.path.join(search_directory, run)
+    if not os.path.isdir(source_dir):
+        utils.logger.error(f"Run directory does not exist: {source_dir}")
+        return
     utils.logger.info(f"You are inspecting {period}-{run}")
 
     # ===========================================================================================

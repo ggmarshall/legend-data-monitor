@@ -1054,7 +1054,7 @@ def add_legend_sheet(work_book, checks_config: dict) -> None:
         "saturated_rate": {
             "category": "phy",
             "description": "Saturated events rate check: average rate of saturated events.",
-            "pass_criteria": "Pass if below 1 mHz.",
+            "pass_criteria": "Pass if below 5 mHz.",
         },
         "tot_discharge_dead_time": {
             "category": "phy",
