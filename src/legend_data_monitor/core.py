@@ -1,11 +1,10 @@
 import os
 import subprocess
-import sys
 
 import yaml
 from dbetto import TextDB
 
-from . import analysis_data, plotting, slow_control, subsystem, utils
+from . import analysis_data, errors, plotting, slow_control, subsystem, utils
 
 
 def retrieve_exposure(
@@ -127,7 +126,7 @@ def retrieve_scdb(config: str, port: int, pswd: str):
         utils.logger.error(
             f"\033[91mError running SSH tunnel to Slow Control database command: {e}\033[0m"
         )
-        sys.exit()
+        raise errors.MonitoringError("retrieve_scdb failed (see log for details)")
 
     # -------------------------------------------------------------------------
     # Read user settings
@@ -261,7 +260,7 @@ def generate_plots(config: dict, plt_path: str, n_files=None):
             utils.logger.error(
                 "\033[91mThe selected saving option in the config file is wrong. Try again with 'overwrite', 'append' or nothing!\033[0m"
             )
-            sys.exit()
+            raise errors.MonitoringError("generate_plots failed (see log for details)")
         # do the plots
         make_plots(config, plt_path, config["saving"])
 

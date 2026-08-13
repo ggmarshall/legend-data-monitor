@@ -4,30 +4,12 @@ import pickle
 import shelve
 
 import lh5
-import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yaml
 
 from . import monitoring, plotting, utils
-
-# -------------------------------------------------------------------------
-
-IPython_default = plt.rcParams.copy()
-SMALL_SIZE = 8
-
-plt.rc("font", size=SMALL_SIZE)
-plt.rc("axes", titlesize=SMALL_SIZE)
-plt.rc("axes", labelsize=SMALL_SIZE)
-plt.rc("xtick", labelsize=SMALL_SIZE)
-plt.rc("ytick", labelsize=SMALL_SIZE)
-plt.rc("legend", fontsize=SMALL_SIZE)
-plt.rc("figure", titlesize=SMALL_SIZE)
-
-matplotlib.rcParams["mathtext.fontset"] = "stix"
-
-plt.rc("axes", facecolor="white", edgecolor="black", axisbelow=True, grid=True)
 
 
 # -------------------------------------------------------------------------
@@ -290,48 +272,56 @@ def check_escale(
     )
     escale_data = utils.load_yaml_or_default(usability_map_file, det_info["detectors"])
 
-    for det_name in detectors_name:
-        eval_result = plotting.plot_all_detector_info(
-            det_name,
-            det_info,
-            partitions_params,
-            detector_status,
-            period,
-            current_run,
-            output_folder,
-            save_pdf=save_pdf,
-            exclude_period=["p05", "p10", "p11", "p13", "p15", "p17"],
-        )
+    escale_shelf_path = os.path.join(
+        output_folder, period, "mtg", f"l200-{period}-cal-monitoring"
+    )
+    os.makedirs(os.path.dirname(escale_shelf_path), exist_ok=True)
+    with shelve.open(
+        escale_shelf_path, "c", protocol=pickle.HIGHEST_PROTOCOL
+    ) as escale_shelf:
+        for det_name in detectors_name:
+            eval_result = plotting.plot_all_detector_info(
+                det_name,
+                det_info,
+                partitions_params,
+                detector_status,
+                period,
+                current_run,
+                output_folder,
+                save_pdf=save_pdf,
+                exclude_period=["p05", "p10", "p11", "p13", "p15", "p17"],
+                shelf=escale_shelf,
+            )
 
-        # update psd status
-        utils.update_evaluation_in_memory(
-            escale_data,
-            det_name,
-            "cal",
-            "escale_fwhm_FEP",
-            eval_result["escale_fwhm_FEP"],
-        )
-        utils.update_evaluation_in_memory(
-            escale_data,
-            det_name,
-            "cal",
-            "escale_fwhm_583",
-            eval_result["escale_fwhm_583"],
-        )
-        utils.update_evaluation_in_memory(
-            escale_data,
-            det_name,
-            "cal",
-            "escale_FEP_pos",
-            eval_result["escale_FEP_pos"],
-        )
-        utils.update_evaluation_in_memory(
-            escale_data,
-            det_name,
-            "cal",
-            "escale_SEP_residual",
-            eval_result["escale_SEP_residual"],
-        )
+            # update psd status
+            utils.update_evaluation_in_memory(
+                escale_data,
+                det_name,
+                "cal",
+                "escale_fwhm_FEP",
+                eval_result["escale_fwhm_FEP"],
+            )
+            utils.update_evaluation_in_memory(
+                escale_data,
+                det_name,
+                "cal",
+                "escale_fwhm_583",
+                eval_result["escale_fwhm_583"],
+            )
+            utils.update_evaluation_in_memory(
+                escale_data,
+                det_name,
+                "cal",
+                "escale_FEP_pos",
+                eval_result["escale_FEP_pos"],
+            )
+            utils.update_evaluation_in_memory(
+                escale_data,
+                det_name,
+                "cal",
+                "escale_SEP_residual",
+                eval_result["escale_SEP_residual"],
+            )
 
     with open(usability_map_file, "w") as f:
         yaml.dump(escale_data, f, sort_keys=False)
@@ -510,8 +500,14 @@ def evaluate_psd_usability_and_plot(
     output_dir: str,
     psd_data: dict,
     save_pdf: bool,
+    shelf=None,
 ):
-    """Plot PSD stability results across runs, evaluate performance, and save both plot and evaluation summary."""
+    """Plot PSD stability results across runs, evaluate performance, and save both plot and evaluation summary.
+
+    If ``shelf`` (an open shelve object) is given it is used directly;
+    otherwise the monitoring shelve is opened and closed per call.
+    """
+    monitoring.apply_monitoring_style()
     run_labels = sorted(fit_results_cal.keys())
     run_positions = list(range(len(run_labels)))
 
@@ -651,17 +647,19 @@ def evaluate_psd_usability_and_plot(
 
     # store the serialized plot in a shelve object under key
     serialized_plot = pickle.dumps(plt.gcf())
-    with shelve.open(
-        os.path.join(
-            output_dir,
-            f"l200-{period}-cal-monitoring",
-        ),
-        "c",
-        protocol=pickle.HIGHEST_PROTOCOL,
-    ) as shelf:
-        shelf[f"{period}_string{location[0]}_pos{location[1]}_{det_name}_AoE_stab"] = (
-            serialized_plot
-        )
+    shelf_key = f"{period}_string{location[0]}_pos{location[1]}_{det_name}_AoE_stab"
+    if shelf is not None:
+        shelf[shelf_key] = serialized_plot
+    else:
+        with shelve.open(
+            os.path.join(
+                output_dir,
+                f"l200-{period}-cal-monitoring",
+            ),
+            "c",
+            protocol=pickle.HIGHEST_PROTOCOL,
+        ) as own_shelf:
+            own_shelf[shelf_key] = serialized_plot
 
     plt.close()
 
@@ -750,19 +748,25 @@ def check_psd(
         utils.logger.debug("...no data are available at the moment")
         return
 
-    # inspect one single det: plot+saving
+    # inspect one single det: plot+saving (one shelve open for all detectors)
     utils.logger.debug("...inspecting PSD stability in cal runs")
-    for idx, det_name in enumerate(detectors_name):
-        evaluate_psd_usability_and_plot(
-            period,
-            current_run,
-            cal_psd_info[det_name],
-            det_name,
-            locations_list[idx],
-            os.path.join(output_dir, period),
-            psd_data,
-            save_pdf,
-        )
+    with shelve.open(
+        os.path.join(output_dir, period, f"l200-{period}-cal-monitoring"),
+        "c",
+        protocol=pickle.HIGHEST_PROTOCOL,
+    ) as shelf:
+        for idx, det_name in enumerate(detectors_name):
+            evaluate_psd_usability_and_plot(
+                period,
+                current_run,
+                cal_psd_info[det_name],
+                det_name,
+                locations_list[idx],
+                os.path.join(output_dir, period),
+                psd_data,
+                save_pdf,
+                shelf=shelf,
+            )
 
     with open(usability_map_file, "w") as f:
         yaml.dump(psd_data, f, sort_keys=False)
@@ -803,6 +807,7 @@ def fep_gain_variation(
     shelf : shelve.Shelf
         Open shelve object where serialized plots will be stored.
     """
+    monitoring.apply_monitoring_style()
     ged = chmap["name"]
     string = chmap["string"]
     position = chmap["position"]
@@ -969,13 +974,15 @@ def check_calibration(
         )
     )
 
+    available_channels = set(lh5.ls(hit_files[0], ""))
+
     with shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf:
         for ged, item in detectors.items():
             if not item["processable"]:
                 continue
 
             # avoid cases where the detector is not present in the output files
-            if item["channel_str"] not in lh5.ls(hit_files[0], ""):
+            if item["channel_str"] not in available_channels:
                 continue
 
             hit_files_data = lh5.read_as(
@@ -1093,9 +1100,6 @@ def check_calibration(
     with open(usability_map_file, "w") as f:
         yaml.dump(output, f)
 
-    with open(usability_map_file, "w") as f:
-        yaml.dump(output, f)
-
 
 def check_calibration_lac_ssc(
     tmp_auto_dir: str,
@@ -1169,13 +1173,15 @@ def check_calibration_lac_ssc(
     output = utils.load_yaml_or_default(usability_map_file, detectors)
     fep_mean_results = {}
 
+    available_channels = set(lh5.ls(hit_files[0], ""))
+
     with shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf:
         for ged, item in detectors.items():
             if not item["processable"]:
                 continue
 
             # avoid cases where the detector is not present in the output files
-            if item["channel_str"] not in lh5.ls(hit_files[0], ""):
+            if item["channel_str"] not in available_channels:
                 continue
 
             hit_files_data = lh5.read_as(

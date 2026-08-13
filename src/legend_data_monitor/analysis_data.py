@@ -1,7 +1,7 @@
 import glob
 import os
 import re
-import sys
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -10,7 +10,7 @@ from dbetto import TextDB
 
 # needed to know which parameters are not in DataLoader
 # but need to be calculated, such as event rate
-from . import save_data, subsystem, utils
+from . import errors, save_data, subsystem, utils
 
 # -------------------------------------------------------------------------
 
@@ -81,7 +81,7 @@ class AnalysisData:
             utils.logger.error(
                 f"\033[91mThe event type '{event_type}' does not exist and cannot be flagged! Try again with one among {list(event_type_flags.keys())}.\033[0m"
             )
-            sys.exit()
+            raise errors.DataError("__init__ failed (see log for details)")
 
         if (
             event_type not in ["all", "phy", "K_lines"]
@@ -94,7 +94,7 @@ class AnalysisData:
                     + f"\033[91mRun the function <subsystem>.flag_{subsystem_name}_events(<{subsystem_name}>) first, where <subsystem> is your Subsystem object, \033[0m"
                     + f"\033[91mand <{subsystem_name}> is a Subsystem object of type '{subsystem_name}', which already has its data loaded with <{subsystem_name}>.get_data(); then create an AnalysisData object.\033[0m"
                 )
-                sys.exit()
+                raise errors.DataError("__init__ failed (see log for details)")
 
         # cannot do event rate and another parameter at the same time
         # since event rate is calculated in windows
@@ -179,7 +179,7 @@ class AnalysisData:
                     + "Check also that you are not trying to plot a flag (ie a quality cut), which is not a parameter by definition.\033[0m",
                     param,
                 )
-                sys.exit()
+                raise errors.DataError("__init__ failed (see log for details)")
 
         # avoid repetition
         params_to_get = list(np.unique(params_to_get))
@@ -192,7 +192,7 @@ class AnalysisData:
                 "\033[91mOne/more entry/entries among %s is/are not present in the dataframe. TRY AGAIN.\033[0m",
                 params_to_get,
             )
-            sys.exit()
+            raise errors.DataError("__init__ failed (see log for details)")
 
         # -------------------------------------------------------------------------
         # select phy/puls/all/Klines events
@@ -257,81 +257,23 @@ class AnalysisData:
 
     def convert_bitmasks(self):
         """Convert float64 bitmask columns into boolean columns based on the conditions saved in metadata."""
-        path = self.path
-        version = self.version
-        possible_dirs = ["tier_evt", "tier/evt"]
-        file_pattern = "*-all-evt_config.yaml"
-        evt_config = None
+        expr_dict = _get_bitmask_expr_dict(self.path, self.version)
 
-        for subdir in possible_dirs:
-            filepath_pattern = os.path.join(
-                path, version, "inputs/dataprod/config", subdir, file_pattern
-            )
-            files = glob.glob(filepath_pattern)
-            if files:
-                filepath = files[0]
-                with open(filepath) as file:
-                    evt_config = yaml.load(file, Loader=yaml.CLoader)
-                break
-
-        if evt_config is None:
+        if expr_dict is None:
             utils.logger.warning(
                 "\033[93mNo config files for converting bitmasks into boolean entries were found. Skip it.\033[0m"
             )
-        else:
+            return
 
-            try:
-                expression = evt_config["operations"]["_geds___quality___is_bb_like"][
-                    "expression"
-                ]
-            except KeyError:
-                filepath_pattern = os.path.join(
-                    path,
-                    version,
-                    "inputs/dataprod/config",
-                    subdir,
-                    "*-geds_qc-evt_config.yaml",
-                )
-                filepath = glob.glob(filepath_pattern)[0]
-                with open(filepath) as file:
-                    evt_config = yaml.load(file, Loader=yaml.CLoader)
-                expression = evt_config["operations"]["geds___quality___is_bb_like"][
-                    "expression"
-                ]
-
-            try:
-                expression = evt_config["operations"][
-                    "geds___quality___is_not_bb_like___is_delayed_discharge"
-                ]["expression"]
-            except KeyError:
-                filepath_pattern = os.path.join(
-                    path,
-                    version,
-                    "inputs/dataprod/config",
-                    subdir,
-                    "*-geds_qc-evt_config.yaml",
-                )
-                filepath = glob.glob(filepath_pattern)[0]
-                with open(filepath) as file:
-                    evt_config = yaml.load(file, Loader=yaml.CLoader)
-                expression = evt_config["operations"][
-                    "geds___quality___is_not_bb_like___is_delayed_discharge"
-                ]["expression"]
-
-            # extract key-value pairs like: hit.is_something == number
-            pattern = r"hit\.(\w+)\s*==\s*(\d+)"
-            matches = re.findall(pattern, expression)
-            expr_dict = {key: int(value) for key, value in matches}
-
-            for col in self.data.columns:
-                if col.startswith("is_") or col.endswith("_classifier"):
-                    if self.data[col].dtype != bool:
-                        if col in expr_dict:
-                            target_value = expr_dict[col]
-                            self.data[col] = self.data[col] == target_value
-                            utils.logger.info(
-                                f"Column '{col}' converted to boolean using value {target_value}."
-                            )
+        for col in self.data.columns:
+            if col.startswith("is_") or col.endswith("_classifier"):
+                if self.data[col].dtype != bool:
+                    if col in expr_dict:
+                        target_value = expr_dict[col]
+                        self.data[col] = self.data[col] == target_value
+                        utils.logger.info(
+                            f"Column '{col}' converted to boolean using value {target_value}."
+                        )
 
     def apply_cut(self, cut: str):
         """
@@ -356,7 +298,7 @@ class AnalysisData:
                         "\033[91mThe cut %s is not available at the moment. Exit here.\033[0m",
                         cut,
                     )
-                    sys.exit()
+                    raise errors.DataError("apply_cut failed (see log for details)")
 
                 self.data = self.data[self.data[cut] == cut_value]
 
@@ -714,6 +656,75 @@ class AnalysisData:
 # -------------------------------------------------------------------------
 
 
+@lru_cache(maxsize=None)
+def _get_bitmask_expr_dict(path: str, version: str) -> dict | None:
+    """Parse the evt config and return the ``hit.<flag> == <value>`` mapping used to convert bitmask columns to booleans.
+
+    Cached per (path, version): AnalysisData can be constructed several times
+    per plot entry and the glob+YAML lookup is identical every time. Returns
+    None when no evt config files are found.
+    """
+    possible_dirs = ["tier_evt", "tier/evt"]
+    file_pattern = "*-all-evt_config.yaml"
+    evt_config = None
+    subdir = possible_dirs[-1]
+
+    for subdir in possible_dirs:
+        filepath_pattern = os.path.join(
+            path, version, "inputs/dataprod/config", subdir, file_pattern
+        )
+        files = glob.glob(filepath_pattern)
+        if files:
+            with open(files[0]) as file:
+                evt_config = yaml.load(file, Loader=yaml.CLoader)
+            break
+
+    if evt_config is None:
+        return None
+
+    try:
+        expression = evt_config["operations"]["_geds___quality___is_bb_like"][
+            "expression"
+        ]
+    except KeyError:
+        filepath_pattern = os.path.join(
+            path,
+            version,
+            "inputs/dataprod/config",
+            subdir,
+            "*-geds_qc-evt_config.yaml",
+        )
+        filepath = glob.glob(filepath_pattern)[0]
+        with open(filepath) as file:
+            evt_config = yaml.load(file, Loader=yaml.CLoader)
+        expression = evt_config["operations"]["geds___quality___is_bb_like"][
+            "expression"
+        ]
+
+    try:
+        expression = evt_config["operations"][
+            "geds___quality___is_not_bb_like___is_delayed_discharge"
+        ]["expression"]
+    except KeyError:
+        filepath_pattern = os.path.join(
+            path,
+            version,
+            "inputs/dataprod/config",
+            subdir,
+            "*-geds_qc-evt_config.yaml",
+        )
+        filepath = glob.glob(filepath_pattern)[0]
+        with open(filepath) as file:
+            evt_config = yaml.load(file, Loader=yaml.CLoader)
+        expression = evt_config["operations"][
+            "geds___quality___is_not_bb_like___is_delayed_discharge"
+        ]["expression"]
+
+    # extract key-value pairs like: hit.is_something == number
+    matches = re.findall(r"hit\.(\w+)\s*==\s*(\d+)", expression)
+    return {key: int(value) for key, value in matches}
+
+
 def get_seconds(time_window: str):
     """
     Convert sampling format used for DataFrame.resample() to int representing seconds.
@@ -723,12 +734,22 @@ def get_seconds(time_window: str):
     >>> get_seconds('30T')
     1800
     """
-    # correspondence of symbol to seconds, T = minutes
-    str_to_seconds = {"S": 1, "T": 60, "H": 60 * 60, "D": 24 * 60 * 60}
-    # unit of this time window
-    time_unit = time_window[-1]
+    # correspondence of symbol to seconds; both the legacy pandas aliases
+    # (S/T/H) and the pandas>=3 ones (s/min/h) are accepted
+    str_to_seconds = {
+        "S": 1,
+        "s": 1,
+        "T": 60,
+        "min": 60,
+        "H": 60 * 60,
+        "h": 60 * 60,
+        "D": 24 * 60 * 60,
+        "d": 24 * 60 * 60,
+    }
+    number = time_window.rstrip("".join(set("".join(str_to_seconds))))
+    time_unit = time_window[len(number) :]
 
-    return int(time_window.rstrip(time_unit)) * str_to_seconds[time_unit]
+    return int(number) * str_to_seconds[time_unit]
 
 
 def cut_dataframe(df: pd.DataFrame, fraction: float = 0.1) -> pd.DataFrame:
@@ -796,15 +817,14 @@ def get_aux_df(
 
         # get abs/mean/% variation for data of aux channel --> objects to save
         utils.logger.debug(f"Getting {aux_ch} data for {param}")
-        aux_data = df.copy()
-        aux_data[param] = aux_data[f"{param}_{aux_ch}"]
-        aux_data = aux_data.drop(
+        aux_data = df.drop(
             columns=[
                 f"{param}_{aux_ch}Ratio",
                 f"{param}_{aux_ch}",
                 f"{param}_{aux_ch}Diff",
             ]
         )
+        aux_data[param] = df[f"{param}_{aux_ch}"]
         # right now, we have the same values repeated for each ged channel
         # -> keep one and substytute with AUX channel ID
         # (only for this aux df, the others still maintain a relation with geds values)
@@ -835,15 +855,14 @@ def get_aux_df(
 
         # get abs/mean/% variation for ratio values with aux channel data --> objects to save
         utils.logger.debug(f"Getting ratio wrt {aux_ch} data for {param}")
-        aux_ratio_data = df.copy()
-        aux_ratio_data[param] = aux_ratio_data[f"{param}_{aux_ch}Ratio"]
-        aux_ratio_data = aux_ratio_data.drop(
+        aux_ratio_data = df.drop(
             columns=[
                 f"{param}_{aux_ch}Ratio",
                 f"{param}_{aux_ch}",
                 f"{param}_{aux_ch}Diff",
             ]
         )
+        aux_ratio_data[param] = df[f"{param}_{aux_ch}Ratio"]
 
         aux_ratio_analysis = AnalysisData(
             aux_ratio_data, selection=plot_settings, aux_info="pulser01anaRatio"
@@ -852,15 +871,14 @@ def get_aux_df(
 
         # get abs/mean/% variation for difference values with aux channel data --> objects to save
         utils.logger.debug(f"Getting difference wrt {aux_ch} data for {param}")
-        aux_diff_data = df.copy()
-        aux_diff_data[param] = aux_diff_data[f"{param}_{aux_ch}Diff"]
-        aux_diff_data = aux_diff_data.drop(
+        aux_diff_data = df.drop(
             columns=[
                 f"{param}_{aux_ch}Ratio",
                 f"{param}_{aux_ch}",
                 f"{param}_{aux_ch}Diff",
             ]
         )
+        aux_diff_data[param] = df[f"{param}_{aux_ch}Diff"]
         aux_diff_analysis = AnalysisData(
             aux_diff_data, selection=plot_settings, aux_info="pulser01anaDiff"
         )
@@ -986,7 +1004,7 @@ def load_subsystem_data(
         for param in plot_info["parameters"]:
             # plot info should contain final parameter to plot i.e. _var if var is asked
             # unit, label and limits are connected to original parameter name
-            param_orig = param.rstrip("_var")
+            param_orig = param.removesuffix("_var")
             plot_info["unit"][param] = None
             plot_info["label"][param] = param
             plot_info["limits"][param] = [None, None]

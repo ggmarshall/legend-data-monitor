@@ -1,4 +1,3 @@
-import sys
 from datetime import datetime, timezone
 from typing import Tuple
 
@@ -6,7 +5,7 @@ import pandas as pd
 from legendmeta import LegendSlowControlDB
 from pandas import DataFrame
 
-from . import utils
+from . import errors, utils
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # SLOW CONTROL LOADING/PLOTTING FUNCTIONS
@@ -96,7 +95,7 @@ class SlowControl:
             utils.logger.error(
                 "\033[91mThis is not present in the SC database! Try again.\033[0m"
             )
-            sys.exit()
+            raise errors.DataError("get_sc_param failed (see log for details)")
 
         # get the dataframe for the process of interest
         utils.logger.debug(
@@ -241,7 +240,7 @@ def get_plotting_info(
                 utils.logger.error(
                     "\033[91mYou're travelling too far in the past, there were no SC data in the time period you selected. Try again!\033[0m"
                 )
-                sys.exit()
+                raise errors.DataError("get_plotting_info failed (see log for details)")
 
     return unit, lower_lim, upper_lim
 

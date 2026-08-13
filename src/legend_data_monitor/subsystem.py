@@ -1,5 +1,4 @@
 import os
-import sys
 import typing
 from datetime import datetime
 from typing import Union
@@ -9,7 +8,7 @@ import pandas as pd
 from dbetto import TextDB
 from pygama.flow import DataLoader
 
-from . import utils
+from . import errors, utils
 
 list_of_str = list[str]
 tuple_of_str = tuple[str]
@@ -262,7 +261,7 @@ class Subsystem:
             utils.logger.error(
                 "\033[91mdsp_data, hit_data, evt_data are all None. Exit here.\033[0m"
             )
-            sys.exit()
+            raise errors.DataError("get_data failed (see log for details)")
         elif len(valid_data) == 1:
             self.data = valid_data[0]
         else:
@@ -337,7 +336,7 @@ class Subsystem:
                 "\033[91mYou selected both 'AUX_ratio' and 'AUX_diff' for %s. Pick one!\033[0m",
                 plot["parameters"],
             )
-            sys.exit()
+            raise errors.DataError("include_aux failed (see log for details)")
         # one option (either diff or ratio) is present
         if "AUX_ratio" in plot.keys() or "AUX_diff" in plot.keys():
             # check if the selected AUX channel exists, otherwise continue
@@ -615,7 +614,7 @@ class Subsystem:
                     utils.logger.error(
                         "\033[91mThere is no pulser AUX channel in L60. Remove this subsystem!\033[0m"
                     )
-                    exit()
+                    raise errors.DataError("is_subsystem failed (see log for details)")
                 if self.experiment == "L200":
                     if self.below_period_3_excluded():
                         return entry["system"] == "puls" and entry["daq"][ch_flag] == 3
