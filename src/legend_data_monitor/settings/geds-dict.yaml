@@ -1,0 +1,92 @@
+# Subsystem plot configuration used by auto_run (production parameter set).
+# Mirrors the historical production config (see examples/p03_L200_phy_r000.yaml);
+# time windows use the pandas>=3 alias spelling (1h, not 1H).
+geds:
+  Baselines (dsp/baseline) in pulser events:
+    parameters: baseline
+    event_type: pulser
+    plot_structure: per channel
+    resampled: also
+    plot_style: vs time
+    variation: true
+    time_window: 1h
+  Mean baselines (dsp/bl_mean) in pulser events:
+    parameters: bl_mean
+    event_type: pulser
+    plot_structure: per channel
+    resampled: also
+    plot_style: vs time
+    variation: true
+    time_window: 1h
+  Noise (dsp/bl_std) in pulser events:
+    parameters: bl_std
+    event_type: pulser
+    plot_structure: per channel
+    resampled: also
+    plot_style: vs time
+    variation: true
+    time_window: 1h
+  Uncalibrated gain (dsp/cuspEmax) in pulser events:
+    parameters: cuspEmax
+    event_type: pulser
+    plot_structure: per channel
+    resampled: also
+    plot_style: vs time
+    variation: true
+    time_window: 1h
+  Calibrated gain (hit/cuspEmax_ctc_cal) in pulser events:
+    parameters: cuspEmax_ctc_cal
+    event_type: pulser
+    plot_structure: per channel
+    resampled: also
+    plot_style: vs time
+    variation: true
+    time_window: 1h
+  Uncalibrated gain (dsp/trapEmax) in pulser events:
+    parameters: trapEmax
+    event_type: pulser
+    plot_structure: per channel
+    resampled: also
+    plot_style: vs time
+    variation: true
+    time_window: 1h
+  Calibrated gain (hit/trapEmax_ctc_cal) in pulser events:
+    parameters: trapEmax_ctc_cal
+    event_type: pulser
+    plot_structure: per channel
+    resampled: also
+    plot_style: vs time
+    variation: true
+    time_window: 1h
+  Event rate in pulser events:
+    parameters: event_rate
+    event_type: pulser
+    plot_structure: per channel
+    resampled: only
+    plot_style: vs time
+    variation: true
+    time_window: 1h
+  Baselines (dsp/baseline) in FCbsln events:
+    parameters: baseline
+    event_type: FCbsln
+    plot_structure: per channel
+    resampled: also
+    plot_style: vs time
+    variation: true
+    time_window: 1h
+  Noise (dsp/bl_std) in FCbsln events:
+    parameters: bl_std
+    event_type: FCbsln
+    plot_structure: per channel
+    resampled: also
+    plot_style: vs time
+    variation: true
+    time_window: 1h
+  Custom A/E (dsp/A_max // hit/cuspEmax_ctc_cal) in pulser events:
+    parameters: AoE_Custom
+    event_type: pulser
+    plot_structure: per channel
+    resampled: also
+    plot_style: vs time
+    variation: true
+    time_window: 1h
