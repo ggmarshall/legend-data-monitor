@@ -359,6 +359,18 @@ class Subsystem:
             # (if no parameters given to plot, baseline and wfmax will always be loaded to flag pulser events anyway)
             aux_subsys.get_data(param)
 
+            # some productions do not process every parameter for the aux channel
+            # (e.g. no cuspEmax in the pulser01ana dsp tier from prod-blind v2.0.0 on)
+            if param not in aux_subsys.data.columns:
+                utils.logger.warning(
+                    "\033[93m'%s' is not available for the %s aux channel in this production; "
+                    "we skip the ratio/diff wrt the AUX channel and plot the parameter as it is.\033[0m",
+                    param,
+                    aux_channel,
+                )
+                del aux_subsys
+                return
+
             # Merge the dataframes based on the 'datetime' column
             utils.logger.debug(
                 "... merging the PULS01ANA dataframe with the original one"

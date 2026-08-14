@@ -532,7 +532,7 @@ def qc_and_evt_summary_plots(
             if s.empty:
                 continue
             freq, bin_edges = np.histogram(
-                s, bins=pd.date_range(start=s.min(), end=s.max(), freq="H")
+                s, bins=pd.date_range(start=s.min(), end=s.max(), freq="h")
             )
             ax.stairs(freq / 3600 * 1000 / on_mass, bin_edges, label=label, color=color)
 
@@ -658,6 +658,11 @@ def box_summary_plot(
         )
 
     df_plot = pd.DataFrame(plot_data)
+    if df_plot.empty:
+        raise errors.DataError(
+            f"box_summary_plot: no detector results to plot for '{info['title']}' "
+            "(empty or missing input data)"
+        )
     # sort by string, and then position
     df = df_plot.sort_values(["string", "pos"]).reset_index(drop=True)
 

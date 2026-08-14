@@ -315,14 +315,15 @@ class AnalysisData:
                 # ! sorry need to jump through a lot of hoops here ! bare with me....
 
                 # --- count number of events in given time windows
-                # - count() returns count of rows for each column - redundant, same value in each (unless we have NaN)
-                # just want one column 'event_rate' -> pick 'channel' since it's never NaN, so correct count; rename to event rate
-                # - this is now a resampled dataframe with column event rate, and multiindex channel, datetime -> put them back as columns with reset index
+                # - size() counts rows per (channel, window) group; the group key
+                #   itself is not selectable from count() results on pandas>=3
+                # - this is a resampled series with multiindex channel, datetime ->
+                #   name it event_rate and put them back as columns with reset index
                 event_rate = (
                     self.data.set_index("datetime")
                     .groupby("channel")
                     .resample(self.time_window, origin="start")
-                    .count()["channel"]
+                    .size()
                     .to_frame(name="event_rate")
                     .reset_index()
                 )
@@ -351,7 +352,6 @@ class AnalysisData:
                 # - group original table by channel and pick first occurrence to get the channel map (ignore other columns)
                 # - reindex to match event rate table index
                 # - put the columns in with concat
-                event_rate = event_rate.set_index("channel")
                 # need to copy, otherwise next line removes "channel" from original, and crashes next time over not finding channel
                 columns = utils.COLUMNS_TO_LOAD[:]
                 columns.remove("channel")
@@ -813,6 +813,17 @@ def get_aux_df(
             param in utils.PARAMETER_TIERS.keys()
             and utils.PARAMETER_TIERS[param] == "hit"
         ) or param in utils.SPECIAL_PARAMETERS.keys():
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+        # the aux merge is skipped when the aux channel does not provide the
+        # parameter in this production (see Subsystem.include_aux)
+        if f"{param}_{aux_ch}" not in df.columns:
+            utils.logger.warning(
+                "\033[93mNo %s aux columns for '%s' in the loaded data; "
+                "skipping the aux abs/ratio/diff objects.\033[0m",
+                aux_ch,
+                param,
+            )
             return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         # get abs/mean/% variation for data of aux channel --> objects to save

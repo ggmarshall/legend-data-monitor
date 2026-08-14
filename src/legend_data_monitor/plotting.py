@@ -519,7 +519,8 @@ def plot_per_cc4(data_analysis: DataFrame, plot_info: dict, pdf: PdfPages):
     ]
     labels["channel"] = labels.index
     labels["label"] = labels[["location", "position", "name", "cc4_channel"]].apply(
-        lambda x: f"s{x[0]}-p{x[1]}-{x[2]}-cc4 ch.{x[3]}", axis=1
+        lambda x: f"s{x['location']}-p{x['position']}-{x['name']}-cc4 ch.{x['cc4_channel']}",
+        axis=1,
     )
     # put it in the table
     data_analysis = data_analysis.set_index("channel")
@@ -610,7 +611,8 @@ def plot_per_string(data_analysis: DataFrame, plot_info: dict, pdf: PdfPages):
     labels = data_analysis.groupby("channel").first()[["name", "position"]]
     labels["channel"] = labels.index
     labels["label"] = labels[["position", "channel", "name"]].apply(
-        lambda x: f"p{x[0]}-ch{str(x[1]).zfill(3)}-{x[2]}", axis=1
+        lambda x: f"p{x['position']}-ch{str(x['channel']).zfill(3)}-{x['name']}",
+        axis=1,
     )
     # put it in the table
     data_analysis = data_analysis.set_index("channel")
@@ -715,7 +717,8 @@ def plot_array(data_analysis: DataFrame, plot_info: dict, pdf: PdfPages):
     labels = data_analysis.groupby("channel").first()[["name", "location", "position"]]
     labels["channel"] = labels.index
     labels["label"] = labels[["location", "position", "channel", "name"]].apply(
-        lambda x: f"p{x[1]}-ch{str(x[2])}-{x[3]}", axis=1
+        lambda x: f"p{x['position']}-ch{str(x['channel'])}-{x['name']}",
+        axis=1,
     )
     # put it in the table
     data_analysis = data_analysis.set_index("channel")
@@ -877,7 +880,10 @@ def plot_per_barrel_and_position(
     labels["channel"] = labels.index
     labels["label"] = labels[
         ["position", "location", "fiber", "channel", "name"]
-    ].apply(lambda x: f"{x[0]}-{x[1]}-{x[2]}-ch{str(x[3]).zfill(3)}-{x[4]}", axis=1)
+    ].apply(
+        lambda x: f"{x['position']}-{x['location']}-{x['fiber']}-ch{str(x['channel']).zfill(3)}-{x['name']}",
+        axis=1,
+    )
     # put it in the table
     data_analysis = data_analysis.set_index("channel")
     data_analysis["label"] = labels["label"]

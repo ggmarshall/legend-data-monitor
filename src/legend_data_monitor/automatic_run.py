@@ -9,6 +9,8 @@ import yaml
 
 from . import calibration, core, errors, logs, monitoring, tasks, utils
 from .contract import build as contract_build
+from .contract import reader as contract_reader
+from .plots import timeseries as contract_plots
 
 
 def auto_run(
@@ -243,6 +245,7 @@ def auto_run(
             metadata_path=os.path.join(auto_dir_path, "inputs"),
             data_type=data_type,
         )
+        _render_headline_pngs(files_folder, period, run, data_type, logger)
 
     def task_slow_control(logger=None):
         core.retrieve_scdb(scdb, port, pswd)
@@ -331,6 +334,52 @@ def auto_run(
             )
 
     return exit_code
+
+
+# headline (flag, param, unit) triples rendered as per-string PNGs after each
+# contract build; missing keys are skipped so datatype/config changes stay safe
+HEADLINE_PNG_KEYS = [
+    ("IsPulser", "TrapemaxCtcCal", "keV"),
+    ("IsPhysics", "TrapemaxCtcCal", "keV"),
+    ("IsPulser", "Baseline", "ADC"),
+    ("IsPulser", "BlStd", "ADC"),
+]
+
+
+def _render_headline_pngs(files_folder, period, run, data_type, logger=None):
+    """Render per-string PNGs for the headline keys from the contract-v2 file.
+
+    The SAVED_PLOT log lines these emit are the attachment source for
+    unattended agents (see docs/auto-giorgio-integration.md).
+    """
+    import pandas as pd
+
+    run_dir = os.path.join(
+        files_folder, "generated/plt/hit", data_type, period, run
+    )
+    v2_file = os.path.join(
+        run_dir, f"l200-{period}-{run}-{data_type}-geds-schema2.hdf"
+    )
+    if not os.path.isfile(v2_file):
+        utils.logger.warning("no contract-v2 file to render PNGs from: %s", v2_file)
+        return
+    detector_map = pd.read_hdf(v2_file, "detector_map")
+    for flag, param, unit in HEADLINE_PNG_KEYS:
+        try:
+            binned = contract_reader.read_binned_series(v2_file, flag, param, "10min")
+        except KeyError:
+            utils.logger.debug("...no %s_%s in %s, skip PNG", flag, param, v2_file)
+            continue
+        for string, group in detector_map.groupby("string"):
+            contract_plots.plot_binned_series(
+                binned,
+                run_dir,
+                f"{flag}_{param}_st{int(string):02d}",
+                title=f"{flag} {param} — string {string} ({period} {run}, 10min bins)",
+                unit=unit,
+                detectors=list(group["name"]),
+                logger=logger,
+            )
 
 
 def _qcp_file_is_populated(filepath: str) -> bool:

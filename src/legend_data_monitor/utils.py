@@ -1320,6 +1320,12 @@ def check_cal_phy_thresholds(
         for issue in found:
             logger.warning("\n%s", issues.format_issue_block(issue, path))
         logger.info("ISSUES %s count=%d", os.path.abspath(path), len(found))
+        # the ISSUES line is the auto-giorgio discovery contract and must land in
+        # orchestrator.log, not only on stdout (outside auto_run the orchestrator
+        # logger has no handlers and the line would bubble to stdout twice)
+        orch = logging.getLogger("legend_data_monitor.orchestrator")
+        if orch.handlers:
+            orch.info("ISSUES %s count=%d", os.path.abspath(path), len(found))
 
     return found
 
