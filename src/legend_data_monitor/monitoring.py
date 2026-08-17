@@ -18,6 +18,8 @@ from lgdo.lh5 import read_as
 from matplotlib.patches import Patch
 
 from . import errors, utils
+from .contract import reader as contract_reader
+from .contract import writer as contract_writer
 
 # --- Phase 4 re-export shims: these functions moved to loading/ and processing/;
 # import them here so existing ``monitoring.X`` references keep working. ---
@@ -52,6 +54,53 @@ from .processing.series import (  # noqa: F401
 # -------------------------------------------------------------------------
 
 SMALL_SIZE = 8
+
+
+def period_contract_path(output_folder: str, period: str, data_type: str = "phy") -> str:
+    """Path of the period-level monitoring contract file.
+
+    One file per (period, datatype) holding the numbers the monitoring figures
+    are drawn from, so consumers no longer have to unpickle a matplotlib
+    figure out of a shelve to reach them.
+    """
+    return os.path.join(
+        output_folder, period, f"l200-{period}-{data_type}-monitoring.hdf"
+    )
+
+
+def write_dead_time(
+    output_folder: str, period: str, run: str, dead_time_s: float, dead_time_pct: float
+) -> str:
+    """Record the discharge dead time of a run in the period contract file."""
+    path = period_contract_path(output_folder, period)
+    contract_writer.write_frame(
+        path,
+        f"dead_time/{run}",
+        pd.DataFrame([{"run": run, "dead_time_s": dead_time_s, "dead_time_pct": dead_time_pct}]),
+    )
+    return path
+
+
+def read_dead_time(output_folder: str, period: str, run: str) -> dict | None:
+    """Dead time of a run, or None when it has not been computed yet.
+
+    Callers must handle None: the value comes from qc_and_evt_summary_plots,
+    which may not have run for this run yet.
+    """
+    path = period_contract_path(output_folder, period)
+    if not os.path.isfile(path):
+        return None
+    try:
+        frame = contract_reader.read_frame(path, f"dead_time/{run}")
+    except (KeyError, OSError):
+        return None
+    if frame is None or frame.empty:
+        return None
+    row = frame.iloc[0]
+    return {
+        "dead_time_s": float(row["dead_time_s"]),
+        "dead_time_pct": float(row["dead_time_pct"]),
+    }
 
 
 def apply_monitoring_style():
@@ -572,10 +621,75 @@ def qc_and_evt_summary_plots(
 
         shelf[f"{period}_{run}_dead_time_pct"] = dead_time_pct
         shelf[f"{period}_{run}_dead_time_s"] = dead_time_s
+        # the shelve is also the only carrier of these two scalars today, and
+        # qc_average needs them; publish them as data so that dependency does
+        # not run through a pickled-figure store
+        write_dead_time(output_folder, period, run, dead_time_s, dead_time_pct)
 
         utils.logger.info(
             f"...dead time from discharges: {dead_time_s:.1f} s ({dead_time_pct:.4f} %)"
         )
+
+
+def compute_detector_summary(results: dict, det_info: dict, pars: dict) -> pd.DataFrame:
+    """Per-detector summary of a monitoring parameter (the box-plot data).
+
+    One row per detector: the mean/std/min/max of its values over the run, its
+    Qbb resolution from the calibration pars, and its position and usability
+    from the channel map. No matplotlib involved, so the numbers can be
+    written to the contract and re-read without a figure.
+    """
+    detectors = det_info["detectors"]
+    rows = []
+    for ged, item in results.items():
+        if ged not in detectors:
+            continue
+        meta_info = detectors[ged]
+
+        if item is None or len(item) == 0:
+            mean = std = min_val = max_val = np.nan
+        else:
+            mean = np.nanmean(item)
+            std = np.nanstd(item)
+            min_val = np.nanmin(item)
+            max_val = np.nanmax(item)
+        try:
+            fwhm = pars[ged]["results"]["ecal"]["cuspEmax_ctc_cal"]["eres_linear"][
+                "Qbb_fwhm_in_kev"
+            ]
+        except (KeyError, TypeError):
+            fwhm = np.nan
+
+        rows.append(
+            {
+                "ged": ged,
+                "string": meta_info["string"],
+                "pos": meta_info["position"],
+                "mean": mean,
+                "std": std,
+                "min": min_val,
+                "max": max_val,
+                "fwhm": fwhm,
+                "usability": meta_info.get("usability", None),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def write_detector_summary(
+    output_folder: str,
+    period: str,
+    run: str,
+    metric: str,
+    frame: pd.DataFrame,
+    data_type: str = "phy",
+) -> str | None:
+    """Write a per-detector summary table into the period contract file."""
+    if frame is None or frame.empty:
+        return None
+    path = period_contract_path(output_folder, period, data_type)
+    contract_writer.write_frame(path, f"detector_summary/{metric}/{run}", frame)
+    return path
 
 
 def box_summary_plot(
@@ -621,43 +735,10 @@ def box_summary_plot(
     """
     apply_monitoring_style()
     utils.logger.debug("...making summary box plots for %s", info["title"])
-    detectors = det_info["detectors"]
-    plot_data = []
-    for ged, item in results.items():
-        if ged not in detectors:
-            continue
-
-        meta_info = detectors[ged]
-
-        if item is None or len(item) == 0:
-            mean = std = min_val = max_val = np.nan
-        else:
-            mean = np.nanmean(item)
-            std = np.nanstd(item)
-            min_val = np.nanmin(item)
-            max_val = np.nanmax(item)
-        try:
-            fwhm = pars[ged]["results"]["ecal"]["cuspEmax_ctc_cal"]["eres_linear"][
-                "Qbb_fwhm_in_kev"
-            ]
-        except (KeyError, TypeError):
-            fwhm = np.nan
-
-        plot_data.append(
-            {
-                "ged": ged,
-                "string": meta_info["string"],
-                "pos": meta_info["position"],
-                "mean": mean,
-                "std": std,
-                "min": min_val,
-                "max": max_val,
-                "fwhm": fwhm,
-                "usability": meta_info.get("usability", None),
-            }
-        )
-
-    df_plot = pd.DataFrame(plot_data)
+    df_plot = compute_detector_summary(results, det_info, pars)
+    write_detector_summary(
+        output_dir, period, run, info["title"], df_plot, data_type=data_type
+    )
     if df_plot.empty:
         raise errors.DataError(
             f"box_summary_plot: no detector results to plot for '{info['title']}' "
@@ -905,13 +986,33 @@ def qc_average(
             ax.set_title(f"period: {period} - run: {run} - passing {par}")
             dt_condition = False
             if par == "IsDischarge":
-                dt = shelf.get(f"{period}_{run}_dead_time_pct", None)
-                ax.set_title(
-                    f"period: {period} - run: {run} - passing {par} - tot dead time {dt:.3f}%"
+                dead_time = read_dead_time(output_folder, period, run)
+                dt = (
+                    dead_time["dead_time_pct"]
+                    if dead_time is not None
+                    else shelf.get(f"{period}_{run}_dead_time_pct", None)
                 )
-                dt_condition = bool(
-                    dt > utils.MTG_PLOT_INFO["tot_discharge_dead_time"]["limits"][1]
-                )
+                if dt is None:
+                    # qc_and_evt_summary_plots has not run for this run; say so
+                    # rather than crashing on the format/comparison below
+                    utils.logger.warning(
+                        "\033[93mno dead time recorded for %s-%s; "
+                        "plotting %s without it\033[0m",
+                        period,
+                        run,
+                        par,
+                    )
+                    ax.set_title(
+                        f"period: {period} - run: {run} - passing {par} - "
+                        "tot dead time unavailable"
+                    )
+                else:
+                    ax.set_title(
+                        f"period: {period} - run: {run} - passing {par} - tot dead time {dt:.3f}%"
+                    )
+                    dt_condition = bool(
+                        dt > utils.MTG_PLOT_INFO["tot_discharge_dead_time"]["limits"][1]
+                    )
 
             x_labels, xs, ys = [], [], []
             string_indices = {}
