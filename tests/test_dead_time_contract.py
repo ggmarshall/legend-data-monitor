@@ -127,3 +127,108 @@ def test_write_detector_summary_skips_empty(tmp_path):
         )
         is None
     )
+
+
+# -------------------------------------------------------------------------
+# QC rates (qc_average)
+# -------------------------------------------------------------------------
+
+
+def _flag_frame(values, start="2026-08-01", freq="1h"):
+    idx = pd.date_range(start, periods=len(values), freq=freq, tz="UTC")
+    return pd.DataFrame(values, index=idx)
+
+
+def test_qc_rate_is_counts_per_second_in_mhz():
+    # 3 hits over a 2 h span -> 3 / 7200 s = 0.4167 mHz
+    frame = _flag_frame([[1], [1], [1]])
+    rates = monitoring.compute_qc_rate_mhz(frame, "p22")
+    assert rates.iloc[0] == pytest.approx(3 / 7200 * 1000)
+
+
+def test_qc_rate_is_per_detector_column():
+    frame = _flag_frame([[1, 0], [1, 1], [0, 1]])
+    rates = monitoring.compute_qc_rate_mhz(frame, "p22")
+    assert len(rates) == 2
+    assert rates.iloc[0] == pytest.approx(2 / 7200 * 1000)
+    assert rates.iloc[1] == pytest.approx(2 / 7200 * 1000)
+
+
+def test_qc_rate_returns_none_without_a_usable_span():
+    assert monitoring.compute_qc_rate_mhz(pd.DataFrame(), "p22") is None
+    # a single sample has no span to divide by
+    assert monitoring.compute_qc_rate_mhz(_flag_frame([[1]]), "p22") is None
+
+
+def test_write_qc_rates_labels_detectors_and_roundtrips(tmp_path):
+    frame = _flag_frame([[1, 0], [1, 1], [0, 1]])
+    frame.columns = [1104000, 1104001]
+    rates = monitoring.compute_qc_rate_mhz(frame, "p22")
+    detectors = {
+        "V01234A": {"daq_rawid": 1104000},
+        "V05678B": {"daq_rawid": 1104001},
+    }
+    path = monitoring.write_qc_rates(
+        str(tmp_path), "p22", "r012", {"IsDischarge": rates}, detectors
+    )
+    back = reader.read_frame(path, "qc_average/r012")
+    assert set(back["flag"]) == {"IsDischarge"}
+    assert set(back["detector"]) == {"V01234A", "V05678B"}
+    assert back["rate_mhz"].tolist() == pytest.approx(rates.tolist())
+
+
+def test_write_qc_rates_skips_when_nothing_computed(tmp_path):
+    assert (
+        monitoring.write_qc_rates(str(tmp_path), "p22", "r012", {"IsDischarge": None}, {})
+        is None
+    )
+
+
+# -------------------------------------------------------------------------
+# QC rate versus time (qc_time_series)
+# -------------------------------------------------------------------------
+
+
+def test_qc_rate_series_resamples_to_mhz_per_cadence():
+    # 2 hits in the first hour, 1 in the second -> 2/3600*1000 then 1/3600*1000
+    idx = pd.to_datetime(
+        ["2026-08-01T00:10", "2026-08-01T00:40", "2026-08-01T01:20"], utc=True
+    )
+    frame = pd.DataFrame({1104000: [1, 1, 1]}, index=idx)
+    rates = monitoring.compute_qc_rate_series(frame, "p22")
+    assert rates.iloc[0, 0] == pytest.approx(2 / 3600 * 1000)
+    assert rates.iloc[1, 0] == pytest.approx(1 / 3600 * 1000)
+
+
+def test_qc_rate_series_renames_columns_to_detectors():
+    idx = pd.date_range("2026-08-01", periods=2, freq="1h", tz="UTC")
+    frame = pd.DataFrame({1104000: [1, 0]}, index=idx)
+    rates = monitoring.compute_qc_rate_series(
+        frame, "p22", detectors={"V01234A": {"daq_rawid": 1104000}}
+    )
+    assert list(rates.columns) == ["V01234A"]
+
+
+def test_qc_rate_series_handles_empty_input():
+    assert monitoring.compute_qc_rate_series(pd.DataFrame(), "p22") is None
+
+
+def test_write_qc_rate_series_roundtrip(tmp_path):
+    idx = pd.date_range("2026-08-01", periods=3, freq="1h", tz="UTC")
+    frame = pd.DataFrame({1104000: [1, 1, 0]}, index=idx)
+    rates = monitoring.compute_qc_rate_series(
+        frame, "p22", detectors={"V01234A": {"daq_rawid": 1104000}}
+    )
+    path = monitoring.write_qc_rate_series(
+        str(tmp_path), "p22", "r012", "IsDischarge", rates
+    )
+    back = reader.read_frame(path, "qc_rate_series/IsDischarge/r012")
+    assert list(back.columns) == ["V01234A"]
+    assert back["V01234A"].tolist() == pytest.approx(rates["V01234A"].tolist())
+
+
+def test_write_qc_rate_series_skips_empty(tmp_path):
+    assert (
+        monitoring.write_qc_rate_series(str(tmp_path), "p22", "r012", "IsDischarge", None)
+        is None
+    )

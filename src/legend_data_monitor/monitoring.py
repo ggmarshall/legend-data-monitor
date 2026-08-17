@@ -881,6 +881,50 @@ def box_summary_plot(
     plt.close()
 
 
+def compute_qc_rate_mhz(frame: pd.DataFrame, period: str) -> pd.Series | None:
+    """Per-detector rate in mHz over a QC flag frame's time span.
+
+    ``frame`` is a (time x rawid) frame of per-event flags, as stored in the
+    v1 monitoring HDF; IGNORE_KEYS ranges are dropped first. Returns None when
+    the frame carries no usable time span.
+    """
+    filtered = filter_series_by_ignore_keys(frame, utils.IGNORE_KEYS, period)
+    if filtered.empty:
+        return None
+    span = (filtered.index.max() - filtered.index.min()).total_seconds()
+    if not span > 0:
+        return None
+    return filtered.sum(axis=0) / span * 1000
+
+
+def write_qc_rates(
+    output_folder: str, period: str, run: str, rates_by_par: dict, detectors: dict
+) -> str | None:
+    """Write per-(flag, detector) QC rates into the period contract file."""
+    rawid_to_name = {
+        info.get("daq_rawid"): name for name, info in detectors.items()
+    }
+    rows = []
+    for par, rates in rates_by_par.items():
+        if rates is None:
+            continue
+        for rawid, rate in rates.items():
+            rows.append(
+                {
+                    "run": run,
+                    "flag": par,
+                    "rawid": int(rawid),
+                    "detector": rawid_to_name.get(int(rawid)),
+                    "rate_mhz": float(rate),
+                }
+            )
+    if not rows:
+        return None
+    path = period_contract_path(output_folder, period)
+    contract_writer.write_frame(path, f"qc_average/{run}", pd.DataFrame(rows))
+    return path
+
+
 def qc_average(
     auto_dir_path: str,
     output_folder: str,
@@ -960,6 +1004,7 @@ def qc_average(
     )
     output = utils.load_yaml_or_default(usability_map_file, detectors)
 
+    rates_by_par = {}
     with (
         shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf,
         pd.HDFStore(my_file, "r") as store,
@@ -975,12 +1020,13 @@ def qc_average(
                 geds_df_abs, utils.IGNORE_KEYS, period
             )
 
-            # time span
-            time_min, time_max = geds_df_abs.index.min(), geds_df_abs.index.max()
-            diff = (time_max - time_min).total_seconds()
-
-            # rates in mHz
-            rates = geds_df_abs.sum(axis=0) / diff * 1000
+            # rates in mHz (computed on the unfiltered frame; the helper applies
+            # the same IGNORE_KEYS filtering, so the two agree)
+            rates = compute_qc_rate_mhz(store[key], period)
+            if rates is None:
+                utils.logger.debug("...no usable time span for %s. Skip it!", par)
+                continue
+            rates_by_par[par] = rates
 
             fig, ax = plt.subplots(figsize=(12, 4), sharex=True)
             ax.set_title(f"period: {period} - run: {run} - passing {par}")
@@ -1120,8 +1166,43 @@ def qc_average(
             shelf[plot_name] = pickle.dumps(fig)
             plt.close(fig)
 
+    write_qc_rates(output_folder, period, run, rates_by_par, detectors)
+
     with open(usability_map_file, "w") as f:
         yaml.dump(output, f)
+
+
+def compute_qc_rate_series(
+    frame: pd.DataFrame, period: str, cadence: str = "1h", detectors: dict | None = None
+) -> pd.DataFrame | None:
+    """Per-detector QC flag rate versus time, in mHz.
+
+    Resamples the whole (time x rawid) frame at once — equivalent to the
+    per-detector resampling the figure does, column by column. Columns are
+    renamed to detector names when a channel map is given.
+    """
+    filtered = filter_series_by_ignore_keys(frame, utils.IGNORE_KEYS, period)
+    if filtered.empty:
+        return None
+    seconds = pd.Timedelta(cadence).total_seconds()
+    rates = filtered.resample(cadence).sum() / seconds * 1000
+    if detectors:
+        rawid_to_name = {
+            info.get("daq_rawid"): name for name, info in detectors.items()
+        }
+        rates = rates.rename(columns=lambda c: rawid_to_name.get(int(c), c))
+    return rates
+
+
+def write_qc_rate_series(
+    output_folder: str, period: str, run: str, flag: str, rates: pd.DataFrame
+) -> str | None:
+    """Write a QC rate-versus-time frame into the period contract file."""
+    if rates is None or rates.empty:
+        return None
+    path = period_contract_path(output_folder, period)
+    contract_writer.write_frame(path, f"qc_rate_series/{flag}/{run}", rates)
+    return path
 
 
 def qc_time_series(
@@ -1210,6 +1291,15 @@ def qc_time_series(
             geds_df_abs = store[key]
             geds_df_abs = filter_series_by_ignore_keys(
                 geds_df_abs, utils.IGNORE_KEYS, period
+            )
+
+            # the numbers behind the per-string figures, published once per flag
+            write_qc_rate_series(
+                output_folder,
+                period,
+                run,
+                par,
+                compute_qc_rate_series(store[key], period, detectors=detectors),
             )
 
             for string, channel_list in str_chns.items():
