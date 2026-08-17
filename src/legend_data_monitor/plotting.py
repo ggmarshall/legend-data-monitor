@@ -1103,6 +1103,30 @@ def align_to_keys(all_keys: list, keys: list, values: list, categorical=False):
     return aligned
 
 
+def _record_variable_detail(
+    det_name, period, current_run, metric, units, val, lower, upper, reference, ok
+):
+    """Stash the magnitudes behind one cal-metric verdict for the issue record.
+
+    These bands are a few times the mean fit error around the detector's own
+    multi-run mean, so the numbers (not just the pass/fail) are what tell a
+    reader whether a deviation matters — and on which side it fell.
+    """
+    if ok or metric is None:
+        return
+    utils.issues.record_detail(
+        period,
+        current_run,
+        "cal",
+        det_name,
+        metric,
+        observed=float(val),
+        threshold=[float(lower), float(upper)],
+        unit=units,
+        reference=float(reference),
+    )
+
+
 def plot_variable(
     det_name: str,
     ax: Axes,
@@ -1114,6 +1138,7 @@ def plot_variable(
     current_run: str,
     errs=None,
     title="",
+    metric=None,
     units="keV",
     alpha=1,
     fixed_thr=None,
@@ -1268,6 +1293,18 @@ def plot_variable(
                     upper = mean_arr_p + fixed_thr
                     lower = mean_arr_p - fixed_thr
                     not_out_of_bounds = bool(lower <= val <= upper)
+                    _record_variable_detail(
+                        det_name,
+                        period,
+                        current_run,
+                        metric,
+                        units,
+                        val,
+                        lower,
+                        upper,
+                        mean_arr_p,
+                        not_out_of_bounds,
+                    )
 
             if err_thr is not None and errs_aligned is not None:
                 errs0 = errs_aligned[mask][valid]
@@ -1297,6 +1334,18 @@ def plot_variable(
                     upper = mean_arr_p + err_thr * means_err
                     lower = mean_arr_p - err_thr * means_err
                     not_out_of_bounds = bool(lower <= val <= upper)
+                    _record_variable_detail(
+                        det_name,
+                        period,
+                        current_run,
+                        metric,
+                        units,
+                        val,
+                        lower,
+                        upper,
+                        mean_arr_p,
+                        not_out_of_bounds,
+                    )
 
     ax.set_title(title, fontsize=14)
     if ylabel is None:
@@ -1471,6 +1520,7 @@ def plot_all_detector_info(
         fwhm_fep_err,
         plot_det_stat=True,
         title="FWHM at FEP",
+        metric="escale_fwhm_FEP",
         units="keV",
         err_thr=3,
         exclude_period=exclude_period,
@@ -1487,6 +1537,7 @@ def plot_all_detector_info(
         fwhm_583_err,
         plot_det_stat=True,
         title="FWHM at 583 keV",
+        metric="escale_fwhm_583",
         units="keV",
         err_thr=3,
         exclude_period=exclude_period,
@@ -1503,6 +1554,7 @@ def plot_all_detector_info(
         mu_fep_keV_first_cal_err,
         plot_det_stat=True,
         title="FEP position in keV using first cal",
+        metric="escale_FEP_pos",
         units="keV",
         fixed_thr=0.65375,
         exclude_period=exclude_period,
@@ -1518,6 +1570,7 @@ def plot_all_detector_info(
         current_run,
         plot_det_stat=True,
         title="SEP residuals",
+        metric="escale_SEP_residual",
         units="keV",
         fixed_thr=0.65375,
         exclude_period=exclude_period,

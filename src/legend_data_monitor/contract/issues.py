@@ -26,6 +26,73 @@ import os
 import numpy as np
 import pandas as pd
 
+# ---------------------------------------------------------------------------
+# metric details
+#
+# The pass/fail booleans in the qcp summary carry no magnitudes, so a triage
+# agent cannot tell a 0.5 % wobble from a real excursion. The evaluators know
+# the numbers at the moment they decide, so they stash them here and the issue
+# emitter (utils.check_cal_phy_thresholds) pops them when it builds records.
+# Keyed by (period, run, datatype, detector, metric) so runs cannot mix.
+# ---------------------------------------------------------------------------
+_DETAILS: dict = {}
+
+
+def record_detail(period, run, datatype, detector, metric, **fields) -> None:
+    """Stash the magnitudes behind one metric evaluation (see module note)."""
+    _DETAILS[(period, run, datatype, detector, metric)] = {
+        k: v for k, v in fields.items() if v is not None
+    }
+
+
+def pop_detail(period, run, datatype, detector, metric) -> dict:
+    """Return (and forget) the details recorded for one metric evaluation."""
+    return _DETAILS.pop((period, run, datatype, detector, metric), {})
+
+
+def clear_details() -> None:
+    """Drop all stashed details (used by tests and between invocations)."""
+    _DETAILS.clear()
+
+
+def classify_severity(
+    observed: float | None,
+    threshold: list | None,
+    excursion: "Excursion | None",
+    *,
+    min_frac_out: float = 0.05,
+    band_multiple: float = 1.0,
+) -> str:
+    """Grade an issue as ``warning`` or ``alert``.
+
+    A failed threshold alone is not newsworthy: the cal metrics are two-sided
+    consistency bands of a few times the fit error, so a detector whose
+    resolution *improved* trips them exactly like one that degraded, and on
+    real data ~30 % of the array trips one per run. Only clearly significant
+    departures become ``alert``; the rest stay ``warning`` for the consumer's
+    severity gate to filter.
+
+    Time series (phy) are graded on the excursion: sustained (at least
+    ``min_frac_out`` of the window) and still out of range at the end.
+    Single-value checks (cal) have no excursion, so they are graded on how far
+    past the band the value sits, in units of the band half-width.
+    """
+    if excursion is not None:
+        if excursion.frac_out < min_frac_out:
+            return "warning"
+        return "warning" if excursion.recovered else "alert"
+
+    if observed is None or not threshold:
+        return "warning"
+    low, high = (list(threshold) + [None, None])[:2]
+    if low is None or high is None or not np.isfinite([low, high]).all():
+        return "warning"
+    half_width = (high - low) / 2.0
+    if half_width <= 0:
+        return "warning"
+    outside = max(low - observed, observed - high, 0.0)
+    return "alert" if outside >= band_multiple * half_width else "warning"
+
 
 @dataclasses.dataclass
 class Excursion:

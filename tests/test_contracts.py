@@ -189,3 +189,114 @@ def test_excursion_one_sided_threshold():
     assert exc is not None
     assert exc.max_deviation == pytest.approx(1.0)
     assert issues.evaluate_excursion(_series([1.0, 5.0]), 0.0, None) is None
+
+
+# -------------------------------------------------------------------------
+# severity grading + metric details
+#
+# A failed threshold alone is not newsworthy: the cal bands are a few times
+# the mean fit error, so on real data ~30% of the array trips one per run.
+# -------------------------------------------------------------------------
+
+
+def test_severity_alert_only_for_sustained_unrecovered_excursion():
+    sustained = issues.evaluate_excursion(_series([0.0, 0.1, 0.2, 0.3]), -0.05, 0.05)
+    assert issues.classify_severity(0.3, [-0.05, 0.05], sustained) == "alert"
+
+
+def test_severity_warning_for_transient_and_recovered():
+    transient = issues.evaluate_excursion(_series([0.0, 0.1, 0.0, 0.0]), -0.05, 0.05)
+    assert issues.classify_severity(0.1, [-0.05, 0.05], transient) == "warning"
+
+
+def test_severity_warning_for_brief_excursion():
+    values = [0.0] * 50 + [0.2]
+    brief = issues.evaluate_excursion(_series(values), -0.05, 0.05)
+    # ~2% of samples out of range -> below the 5% floor
+    assert issues.classify_severity(0.2, [-0.05, 0.05], brief) == "warning"
+
+
+def test_severity_warning_when_no_magnitudes_available():
+    assert issues.classify_severity(None, None, None) == "warning"
+
+
+def test_metric_details_roundtrip_and_are_popped():
+    issues.clear_details()
+    issues.record_detail(
+        "p15", "r002", "phy", "V02160A", "gain_var", observed=0.53, unit="%"
+    )
+    detail = issues.pop_detail("p15", "r002", "phy", "V02160A", "gain_var")
+    assert detail == {"observed": 0.53, "unit": "%"}
+    # popped once: a second read cannot re-attach stale numbers to a later run
+    assert issues.pop_detail("p15", "r002", "phy", "V02160A", "gain_var") == {}
+
+
+def test_metric_details_are_keyed_per_run():
+    issues.clear_details()
+    issues.record_detail("p15", "r002", "phy", "V02160A", "gain_var", observed=1.0)
+    assert issues.pop_detail("p15", "r003", "phy", "V02160A", "gain_var") == {}
+    issues.clear_details()
+
+
+def test_severity_single_value_grades_on_distance_past_band():
+    # cal metrics have no time series: a value just past a 3-sigma band is a
+    # warning, one far outside it is an alert
+    band = [2.9, 3.1]
+    assert issues.classify_severity(3.12, band, None) == "warning"
+    assert issues.classify_severity(3.5, band, None) == "alert"
+    # improvements (below the band) grade the same way by distance
+    assert issues.classify_severity(2.88, band, None) == "warning"
+    assert issues.classify_severity(2.4, band, None) == "alert"
+
+
+def test_severity_single_value_needs_a_finite_band():
+    assert issues.classify_severity(5.0, [None, 3.0], None) == "warning"
+    assert issues.classify_severity(5.0, [3.0, 3.0], None) == "warning"
+
+
+def test_check_threshold_details_reach_the_issue_record(tmp_path):
+    """The evaluator's magnitudes must survive into the JSONL, not just the verdict."""
+    import yaml
+
+    from legend_data_monitor import utils
+
+    issues.clear_details()
+    idx = pd.date_range("2026-08-01", periods=6, freq="10min", tz="UTC")
+    # sustained, unrecovered departure above the +2 threshold
+    series = pd.Series([0.0, 0.5, 3.0, 3.5, 4.0, 4.5], index=idx)
+    output = {"V02160A": {"cal": {"fwhm_ok": True}, "phy": {}}}
+    utils.check_threshold(
+        series,
+        "V02160A",
+        None,
+        [idx[0]],
+        [-2.0, 2.0],
+        "pulser_stab",
+        output,
+        period="p22",
+        run="r012",
+    )
+    assert output["V02160A"]["phy"]["pulser_stab"] is False
+
+    run_dir = tmp_path / "generated" / "plt" / "hit" / "phy" / "p22" / "r012"
+    run_dir.mkdir(parents=True)
+    summary = run_dir / "l200-p22-r012-qcp_summary.yaml"
+    summary.write_text(yaml.dump(output))
+
+    found = utils.check_cal_phy_thresholds(
+        str(run_dir.parents[1]),
+        "p22",
+        "r012",
+        "phy",
+        ["V02160A"],
+        detector_info={"V02160A": {"daq_rawid": 1104000, "string": 4, "position": 2}},
+    )
+    (issue,) = [i for i in found if i.metric == "pulser_stab"]
+    assert issue.observed == pytest.approx(4.5)
+    assert issue.threshold == [-2.0, 2.0]
+    assert issue.excursion.recovered is False
+    assert issue.excursion.frac_out == pytest.approx(4 / 6)
+    assert issue.severity == "alert"
+    assert issue.rawid == 1104000 and issue.string == 4 and issue.position == 2
+    assert issue.window[0].startswith("2026-08-01")
+    issues.clear_details()

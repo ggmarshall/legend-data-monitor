@@ -42,6 +42,15 @@ def write_hist(
             if value is not None:
                 group.attrs[name] = json.dumps(value) if isinstance(value, (list, dict)) else value
         group.attrs["schema"] = schema.SCHEMA_VERSION
+        # Spell out the two conventions a plain-h5py reader cannot guess and
+        # gets silently wrong: Mean storage keeps means (NOT sums, so never
+        # divide by counts), and both axes carry flow bins.
+        group.attrs["values_are"] = "mean"
+        group.attrs["counts_are"] = "n_entries"
+        group.attrs["flow_bins"] = (
+            "axis_0: [underflow, ...bins..., overflow]; "
+            "axis_1: [...categories..., flow]"
+        )
 
 
 def write_binned_series(

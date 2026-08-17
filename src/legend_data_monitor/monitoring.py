@@ -1819,6 +1819,8 @@ def plot_time_series(
                                     threshold,
                                     info[inspected_parameter]["title"],
                                     output,
+                                    period=period,
+                                    run=current_run,
                                 )
 
                             # PULS01ANA has a signal - we can correct GEDS energies for it!

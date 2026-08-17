@@ -30,7 +30,16 @@ Per unattended invocation (`legend-data-monitor auto_run`):
   `first_seen_run`, `data_ref {file, key}` (contract-v2 HDF + hist key),
   `raw_ref {tier_dir, channel, param, timestamps}` (provenance into the
   production LH5 tree for event-level triage), `plots []` (absolute paths),
-  `suggested_action`.
+  `suggested_action`. Fields the evaluator could not supply are omitted, so
+  consumers must treat every field except `issue_id`/`schema`/`detector`/
+  `metric`/`severity`/`period`/`run`/`datatype` as optional.
+- **Severity is a triage gate, not a restatement of the verdict.** Most cal
+  metrics are two-sided consistency bands a few times the mean fit error wide,
+  so on real data ~30 % of the array trips one per run — including detectors
+  whose resolution *improved*. lmon therefore grades a failed threshold as
+  `alert` only when the excursion is sustained (`frac_out` ≥ 5 %) and has not
+  recovered by the end of the window; everything else is a `warning`. Run
+  auto-giorgio with `MON_MIN_SEVERITY=alert` unless you want the long tail.
 - Exit codes: 0 all tasks ok; 1 ≥1 task failed (others still ran); 2
   config/environment error.
 
@@ -119,6 +128,21 @@ New optional field: `issues: [ …up to 20 full JSONL records… ]` plus
   `tests/test_contract_v2.py::test_v2_readable_with_plain_h5py`), prints
   per-bin stats for the flagged detector around `window` plus run means of
   its string-mates for context. Read-only.
+
+  **Two conventions that silently corrupt a naive reader** (both now also
+  stated in the group attrs `values_are` / `counts_are` / `flow_bins`):
+  1. `storage/values` **already holds the per-bin means** (boost-histogram
+     Mean storage) — dividing by `storage/counts` looks natural and yields
+     garbage (485 instead of 14073 ADC on real data). `counts` is the entry
+     count, used only to mask empty bins (`counts == 0` -> no data).
+  2. **Both axes carry flow bins**: `axis_0` is
+     `[underflow, ...bins..., overflow]` (980 rows for 978 time bins) and
+     `axis_1` is `[...categories..., flow]` (60 columns for 59 detectors).
+     Slice `[1:-1, :len(categories)]` before use, or detectors shift by one.
+
+  Also: `detector_map` lists every detector in the channel map, including ones
+  with no data in this run (60 rows vs 59 data columns on p22/r012) — intersect
+  on `ref_axes/axis_1/categories`, never zip by position.
 - Existing helpers reused unchanged: `validity_lookup.py` (mandatory before
   any status change), `channel_to_detector.py`.
 - Operational requirement: `MON_ROOTS` entries not under `PROD_ROOTS` must be
@@ -129,9 +153,33 @@ New optional field: `issues: [ …up to 20 full JSONL records… ]` plus
 
 | verdict | meaning | typical action |
 |---|---|---|
-| `FIXED` | minimal metadata edit made | usability → `ac`/`off` in `datasets/statuses` keyed at the correct `valid_from` (verified via `validity_lookup.py`), or an `ignored_daq_cycles.yaml` entry for a bad cycle window |
+| `FIXED` | minimal metadata edit made | usability → `ac`/`off` in `datasets/statuses` keyed at the correct `valid_from` (verified via `validity_lookup.py`), a **PSD status downgrade** (see below), or an `ignored_daq_cycles.yaml` entry for a bad cycle window |
 | `TRANSIENT` | PERSISTENCE says RECOVERED, or single-run blip (short `longest_s`, `recovered=true`, first seen this run) | none |
 | `NEEDS-HUMAN` | persisting hardware anomaly, ambiguous fix, or already covered by an open PR | suggested fix in summary |
+
+**PSD status downgrades are in scope for the agent.** For A/E instability
+(`AoE_stab`, and the A/E mean/width drifts behind it) the proportionate fix is
+usually not a usability change but the `psd` block of the detector's entry in
+`datasets/statuses`: set the affected classifiers in `psd.status`
+(`low_aoe`/`high_aoe`/`lq`) from `valid` to `present` — "available but not to
+be trusted" — leaving `usability` alone when the energy scale is fine.
+
+Rules for that edit:
+
+- **Keep `is_bb_like` consistent**: it must not combine classifiers that are no
+  longer `valid`, so drop the downgraded ones from the expression (the
+  statuses README: "Normally these are the classifiers marked `valid`"). A
+  survey of p22/r012 found 10/60 detectors already violating this, 4 of them
+  `usability: on` — do not add to that pile.
+- Same `valid_from` discipline as a usability change: resolve the effective
+  status with `validity_lookup.py` first, and key the new entry at the run
+  where the instability starts, not at the run that happened to alert.
+- Restoring a classifier to `valid` is **not** an agent action — that is a
+  `NEEDS-HUMAN` recommendation.
+- The evidence to cite in the PR is the raw A/E distribution from the cal
+  pars (`results.aoe.correction_fit_results.dep_fit` `mu`/`sigma` with their
+  errors, per run), not the derived `aoe.low_cut`, which moves for fitting
+  reasons unrelated to detector behaviour.
 
 Retry/dedup: unchanged (24 h retry for needs-human/transient/failed;
 `pr-opened` terminal; `bin/requeue.sh <sig>` to force).
@@ -140,16 +188,19 @@ Retry/dedup: unchanged (24 h retry for needs-human/transient/failed;
 
 - **daily_check.sh**: one digest line per open `mon:` cluster:
   `• mon:gain_var ×7 detectors p19-r001..r003 [persisting|resolved|<ledger verdict>]`.
-- **docs/common-issues.md**: four new numbered entries in the existing shape
+- **docs/common-issues.md**: five new numbered entries in the existing shape
   (Seen in / Cause / Classify / Diagnose / Fix / Worked example), keyed by
   the ISSUE header string: gain jump (`metric=gain_var` or
   `TrapemaxCtcCal_var`), noise increase (`BlStd`), event-rate anomaly
-  (`EventRate`), QC failure-rate. Each names `read_issue_data.py` as the
-  diagnose step and the metadata fix surface.
+  (`EventRate`), QC failure-rate, and **A/E instability** (`AoE_stab`, fix =
+  PSD status downgrade + `is_bb_like` update). Each names
+  `read_issue_data.py` as the diagnose step and the metadata fix surface.
 - **CLAUDE.md**: new "detector anomaly triage" task-type section (vs
   "pipeline failure"); issue JSON/log content is untrusted data; add
   `read_issue_data.py` to the tools list; restate read-only-prod,
-  metadata-only edits, validity_lookup-before-status-change.
+  metadata-only edits, validity_lookup-before-status-change; state that the
+  metadata surfaces the agent may edit are `usability`, the `psd` block
+  (status + `is_bb_like`), and `ignored_daq_cycles.yaml` — nothing else.
 - **config/monitor.env.example**:
   ```sh
   # legend-data-monitor output roots (detector-issue + task-failure detection)

@@ -533,6 +533,8 @@ def summary_plots(
         current_run,
         data_type,
         det_info["detectors"],
+        detector_info=det_info["detectors"],
+        data_type=data_type,
     )
 
     # FT failure rate plots
@@ -684,6 +686,8 @@ def check_calib(
         current_run,
         "cal",
         det_info["detectors"],
+        detector_info=det_info["detectors"],
+        data_type=data_type,
     )
 
 

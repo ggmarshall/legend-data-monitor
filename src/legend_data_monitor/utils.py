@@ -1257,12 +1257,69 @@ def get_output_path(config: dict):
     return out_path
 
 
+# metric -> contract-v2 histogram key, so an issue points at the binned data a
+# triage agent can actually re-measure (not just the pass/fail summary)
+ISSUE_METRIC_HIST_KEYS = {
+    "baseln_stab": "hist/IsPulser_Baseline",
+    "baseln_spike": "hist/IsPulser_Baseline",
+    "pulser_stab": "hist/IsPulser_TrapemaxCtcCal",
+    "FEP_gain_stab": "hist/IsPulser_TrapemaxCtcCal",
+    "const_stab": "hist/IsPulser_TrapemaxCtcCal",
+    "escale_FEP_pos": "hist/IsPhysics_TrapemaxCtcCal",
+    "escale_fwhm_FEP": "hist/IsPhysics_TrapemaxCtcCal",
+    "escale_fwhm_583": "hist/IsPhysics_TrapemaxCtcCal",
+}
+
+
+def _first_seen_runs(output_folder: str, period: str, run: str, key: str) -> dict:
+    """Map (detector, metric) -> earliest run in this period that already raised it."""
+    issues_root = output_folder.split("/generated/")[0]
+    first: dict = {}
+    period_dir = os.path.join(issues_root, "generated/mon/issues", period)
+    if not os.path.isdir(period_dir):
+        return first
+    for past_run in sorted(os.listdir(period_dir)):
+        if past_run >= run:
+            continue
+        path = issues.issues_file_path(issues_root, period, past_run, key)
+        if not os.path.isfile(path):
+            continue
+        with open(path) as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                first.setdefault(
+                    (record.get("detector"), record.get("metric")),
+                    record.get("first_seen_run") or past_run,
+                )
+    return first
+
+
+def _issue_plots(run_dir: str, string: int | None) -> list:
+    """Diagnostic PNGs to attach to an issue: this detector's string, if rendered."""
+    if string is None:
+        return []
+    figs = os.path.join(run_dir, "figs")
+    if not os.path.isdir(figs):
+        return []
+    suffix = f"_st{int(string):02d}.png"
+    return [
+        os.path.join(figs, name)
+        for name in sorted(os.listdir(figs))
+        if name.endswith(suffix)
+    ]
+
+
 def check_cal_phy_thresholds(
     output_folder: str,
     period: str,
     run: str,
     key: str,
     detectors: list,
+    detector_info: dict | None = None,
+    data_type: str = "phy",
 ):
     """
     Check detector calibration/physics thresholds for a given run and raise detector issues.
@@ -1283,26 +1340,61 @@ def check_cal_phy_thresholds(
         Data type key to inspect, either 'cal' or 'phy'.
     detectors : list
         List of detector names.
+    detector_info : dict, optional
+        ``det_info["detectors"]`` mapping, used to stamp rawid/string/position
+        on the issue records.
+    data_type : str
+        Data type of the run being inspected; selects the contract-v2 file the
+        records point at.
     """
     usability_map_file = os.path.join(
         output_folder, period, run, f"l200-{period}-{run}-qcp_summary.yaml"
     )
     output = load_yaml_or_default(usability_map_file, detectors)
 
+    run_dir = os.path.join(output_folder, period, run)
+    contract_file = os.path.join(
+        run_dir, f"l200-{period}-{run}-{data_type}-geds-schema2.hdf"
+    )
+    first_seen = _first_seen_runs(output_folder, period, run, key)
+
     found = []
     for ged, det_data in output.items():
         data_dict = det_data.get(key, {})
         for metric, ok in data_dict.items():
             if ok is False:
+                detail = issues.pop_detail(period, run, key, ged, metric)
+                # the qcp summary is only the verdict; point triage at the
+                # binned contract data (falling back to the summary itself)
+                hist_key = ISSUE_METRIC_HIST_KEYS.get(metric)
+                if hist_key and os.path.isfile(contract_file):
+                    data_ref = {"file": contract_file, "key": hist_key}
+                else:
+                    data_ref = {"file": usability_map_file, "key": metric}
+                meta = (detector_info or {}).get(ged, {})
                 found.append(
                     issues.Issue(
                         detector=ged,
                         metric=metric,
-                        severity="alert",
+                        severity=issues.classify_severity(
+                            detail.get("observed"),
+                            detail.get("threshold"),
+                            detail.get("excursion"),
+                        ),
                         period=period,
                         run=run,
                         datatype=key,
-                        data_ref={"file": usability_map_file, "key": metric},
+                        observed=detail.get("observed"),
+                        threshold=detail.get("threshold"),
+                        unit=detail.get("unit"),
+                        window=detail.get("window"),
+                        excursion=detail.get("excursion"),
+                        first_seen_run=first_seen.get((ged, metric), run),
+                        rawid=meta.get("daq_rawid"),
+                        string=meta.get("string"),
+                        position=meta.get("position"),
+                        data_ref=data_ref,
+                        plots=_issue_plots(run_dir, meta.get("string")),
                         suggested_action=(
                             "if persistent and not spurious: review usability of "
                             f"{ged} in legend-datasets statuses "
@@ -1352,6 +1444,40 @@ def update_evaluation_in_memory(
     data.setdefault(det_name, {}).setdefault(data_type, {})[key] = value
 
 
+def select_window(
+    data_series: pd.Series,
+    last_checked: float | None | str,
+    t0: list,
+) -> pd.Series | None:
+    """Return the slice of ``data_series`` a threshold check looks at.
+
+    Shared by :func:`find_over_threshold` (pass/fail) and
+    :func:`check_threshold` (which needs the same slice to quantify the
+    excursion), so the two can never disagree about the window.
+    """
+    if data_series is None:
+        return None
+
+    # filter by last_checked
+    if last_checked not in ["None", None]:
+        cutoff = pd.to_datetime(float(last_checked), unit="s", utc=True)
+        data_series = data_series[data_series.index > cutoff]
+
+    if data_series.empty:
+        return None
+
+    # define time window
+    start = (
+        pd.Timestamp(t0[0]).tz_localize("UTC")
+        if t0[0].tzinfo is None
+        else t0[0].tz_convert("UTC")
+    )
+    end = start + pd.Timedelta(days=7)
+    data_series = data_series[(data_series.index >= start) & (data_series.index < end)]
+
+    return None if data_series.empty else data_series
+
+
 def find_over_threshold(
     data_series: pd.Series,
     last_checked: float | None | str,
@@ -1375,25 +1501,8 @@ def find_over_threshold(
     if data_series is None or all(v is None for v in threshold):
         return False
 
-    # filter by last_checked
-    if last_checked not in ["None", None]:
-        cutoff = pd.to_datetime(float(last_checked), unit="s", utc=True)
-        data_series = data_series[data_series.index > cutoff]
-
-    if data_series.empty:
-        return False
-
-    # define time window
-    start = (
-        pd.Timestamp(t0[0]).tz_localize("UTC")
-        if t0[0].tzinfo is None
-        else t0[0].tz_convert("UTC")
-    )
-    end = start + pd.Timedelta(days=7)
-    mask_time = (data_series.index >= start) & (data_series.index < end)
-    data_series = data_series[mask_time]
-
-    if data_series.empty:
+    data_series = select_window(data_series, last_checked, t0)
+    if data_series is None:
         return False
 
     low, high = threshold
@@ -1416,6 +1525,8 @@ def check_threshold(
     threshold: list,
     parameter: str,
     output: dict,
+    period: str | None = None,
+    run: str | None = None,
 ):
     """Check if a given parameter is over threshold and update the email message list.
 
@@ -1435,6 +1546,9 @@ def check_threshold(
         Parameter name under inspection.
     output: dict
         Dictionary containing summary cal and phy info.
+    period, run : str, optional
+        Identify the evaluation so its magnitudes can be attached to the issue
+        record; when omitted only the pass/fail verdict is recorded.
     """
     # no available FWHM to compare gain variations with
     if parameter == "pulser_stab" and not output[channel_name]["cal"]["fwhm_ok"]:
@@ -1446,6 +1560,26 @@ def check_threshold(
     # condition = true -> some values over threshold, mark it as 'false' in the YAML
     # condition = false -> no values over threshold, mark it as 'true' in the YAML
     update_evaluation_in_memory(output, channel_name, "phy", parameter, not condition)
+
+    # stash the magnitudes behind the verdict for the issue records
+    if condition and period is not None:
+        window = select_window(data_series, last_checked, t0)
+        if window is not None:
+            low, high = threshold
+            excursion = issues.evaluate_excursion(window, low, high)
+            worst = window.max() if high is not None else window.min()
+            issues.record_detail(
+                period,
+                run,
+                "phy",
+                channel_name,
+                parameter,
+                observed=float(worst),
+                threshold=list(threshold),
+                unit=MTG_PLOT_INFO.get(parameter, {}).get("unit"),
+                window=[str(window.index[0]), str(window.index[-1])],
+                excursion=excursion,
+            )
 
     return
 
