@@ -30,6 +30,7 @@ def auto_run(
     data_type,
     prod_root=None,
     render_plots=True,
+    write_shelves=True,
 ):
     """Inspect LEGEND HDF5 (LH5) processed data (and Slow Control data from lngs-login cluster) for a specific period and run (if specified; otherwise the latest being processed are used) and save plots and summary files.
 
@@ -41,6 +42,8 @@ def auto_run(
     ``prod_root`` overrides the cluster-mapped production root (useful for
     local/mock trees); by default the root is derived from ``cluster``.
     """
+    monitoring.set_write_shelves(write_shelves)
+
     if prod_root is not None:
         auto_dir = prod_root
     else:

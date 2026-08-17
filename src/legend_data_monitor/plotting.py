@@ -1723,15 +1723,13 @@ def plot_all_detector_info(
     if shelf is not None:
         shelf[shelf_key] = serialized_plot
     else:
-        with shelve.open(
+        with monitoring.open_shelf(
             os.path.join(
                 output_folder,
                 period,
                 "mtg",
                 f"l200-{period}-cal-monitoring",
-            ),
-            "c",
-            protocol=pickle.HIGHEST_PROTOCOL,
+            )
         ) as own_shelf:
             own_shelf[shelf_key] = serialized_plot
     plt.close()

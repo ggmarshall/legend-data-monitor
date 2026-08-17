@@ -277,9 +277,7 @@ def check_escale(
         output_folder, period, "mtg", f"l200-{period}-cal-monitoring"
     )
     os.makedirs(os.path.dirname(escale_shelf_path), exist_ok=True)
-    with shelve.open(
-        escale_shelf_path, "c", protocol=pickle.HIGHEST_PROTOCOL
-    ) as escale_shelf:
+    with monitoring.open_shelf(escale_shelf_path) as escale_shelf:
         for det_name in detectors_name:
             eval_result = plotting.plot_all_detector_info(
                 det_name,
@@ -652,13 +650,11 @@ def evaluate_psd_usability_and_plot(
     if shelf is not None:
         shelf[shelf_key] = serialized_plot
     else:
-        with shelve.open(
+        with monitoring.open_shelf(
             os.path.join(
                 output_dir,
                 f"l200-{period}-cal-monitoring",
-            ),
-            "c",
-            protocol=pickle.HIGHEST_PROTOCOL,
+            )
         ) as own_shelf:
             own_shelf[shelf_key] = serialized_plot
 
@@ -751,11 +747,9 @@ def check_psd(
 
     # inspect one single det: plot+saving (one shelve open for all detectors)
     utils.logger.debug("...inspecting PSD stability in cal runs")
-    with shelve.open(
-        os.path.join(output_dir, period, f"l200-{period}-cal-monitoring"),
-        "c",
-        protocol=pickle.HIGHEST_PROTOCOL,
-    ) as shelf:
+    with monitoring.open_shelf(
+        os.path.join(output_dir, period, f"l200-{period}-cal-monitoring")
+        ) as shelf:
         for idx, det_name in enumerate(detectors_name):
             evaluate_psd_usability_and_plot(
                 period,
@@ -1014,7 +1008,7 @@ def check_calibration(
 
     available_channels = set(lh5.ls(hit_files[0], ""))
 
-    with shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf:
+    with monitoring.open_shelf(shelve_path) as shelf:
         for ged, item in detectors.items():
             if not item["processable"]:
                 continue
@@ -1257,7 +1251,7 @@ def check_calibration_lac_ssc(
 
     available_channels = set(lh5.ls(hit_files[0], ""))
 
-    with shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf:
+    with monitoring.open_shelf(shelve_path) as shelf:
         for ged, item in detectors.items():
             if not item["processable"]:
                 continue

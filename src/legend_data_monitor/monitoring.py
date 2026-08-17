@@ -5,6 +5,7 @@ import math
 import os
 import pickle
 import shelve
+from contextlib import contextmanager
 from functools import partial
 
 import awkward as ak
@@ -54,6 +55,41 @@ from .processing.series import (  # noqa: F401
 # -------------------------------------------------------------------------
 
 SMALL_SIZE = 8
+
+
+_WRITE_SHELVES = True
+
+
+def set_write_shelves(enabled: bool) -> None:
+    """Enable/disable the legacy pickled-figure shelve output process-wide.
+
+    The shelves exist only for the legacy dashboard; lmon never reads them
+    back. Every generator now publishes its numbers to the period contract
+    file, so a run can be asked to skip the pickling entirely.
+    """
+    global _WRITE_SHELVES
+    _WRITE_SHELVES = bool(enabled)
+
+
+class _NullShelf(dict):
+    """Stand-in for a shelve when the legacy output is disabled.
+
+    Writes are dropped; ``get`` behaves like an empty store, which callers
+    already handle (see the dead-time lookup in qc_average).
+    """
+
+    def __setitem__(self, key, value):  # noqa: D105 - drop the pickled figure
+        return
+
+
+@contextmanager
+def open_shelf(path: str):
+    """Open the legacy shelve, or hand back a sink when it is disabled."""
+    if not _WRITE_SHELVES:
+        yield _NullShelf()
+        return
+    with shelve.open(path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf:
+        yield shelf
 
 
 def period_contract_path(output_folder: str, period: str, data_type: str = "phy") -> str:
@@ -192,7 +228,7 @@ def qc_distributions(
     step = 0.4
     classifier_rows = []
     with (
-        shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf,
+        open_shelf(shelve_path) as shelf,
         pd.HDFStore(my_file, "r") as store,
     ):
         df_energy_IsPhysics = store["/IsPhysics_TrapemaxCtcCal"]
@@ -478,7 +514,7 @@ def qc_and_evt_summary_plots(
     on_mass = 0
 
     # ONE PERIOD, ALL RUNS
-    with shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf:
+    with open_shelf(shelve_path) as shelf:
         # --- Per-string plots ---
         for string, det_list in det_info["str_chns"].items():
             fig, ax = plt.subplots(figsize=(12, 6))
@@ -946,16 +982,14 @@ def box_summary_plot(
 
     # serialize+plot in a shelve object
     serialized_plot = pickle.dumps(fig)
-    with shelve.open(
+    with open_shelf(
         os.path.join(
             output_dir,
             period,
             run,
             f"mtg/l200-{period}-{run}-{data_type}-monitoring",
-        ),
-        "c",
-        protocol=pickle.HIGHEST_PROTOCOL,
-    ) as shelf:
+        )
+        ) as shelf:
         shelf[f"{period}_{run}_{info['title']}"] = serialized_plot
 
     plt.close()
@@ -1086,7 +1120,7 @@ def qc_average(
 
     rates_by_par = {}
     with (
-        shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf,
+        open_shelf(shelve_path) as shelf,
         pd.HDFStore(my_file, "r") as store,
     ):
         for par in pars_to_inspect:
@@ -1358,7 +1392,7 @@ def qc_time_series(
     color_cycle = itertools.cycle(plt.cm.tab20.colors)
 
     with (
-        shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf,
+        open_shelf(shelve_path) as shelf,
         pd.HDFStore(my_file, "r") as store,
     ):
 
@@ -1566,6 +1600,35 @@ def build_new_files(generated_path: str, period: str, run: str, data_type="phy")
                 json.dump(info_dict, file, indent=4)
 
 
+def write_stability_series(
+    output_folder: str, period: str, run: str, group: str, name: str, series: dict
+) -> str | None:
+    """Write per-detector monitoring series into the period contract file.
+
+    ``series`` maps detector name -> the pandas Series the figure plots, so the
+    frame written here is exactly what was drawn (time x detector).
+    """
+    series = {det: s for det, s in (series or {}).items() if s is not None and len(s)}
+    if not series:
+        return None
+    path = period_contract_path(output_folder, period)
+    contract_writer.write_frame(
+        path, f"{group}/{name}/{run}", pd.DataFrame(series)
+    )
+    return path
+
+
+def write_cal_points(
+    output_folder: str, period: str, run: str, rows: list
+) -> str | None:
+    """Write the per-run calibration points marked on the stability figures."""
+    if not rows:
+        return None
+    path = period_contract_path(output_folder, period)
+    contract_writer.write_frame(path, f"cal_points/{run}", pd.DataFrame(rows))
+    return path
+
+
 def plot_time_series(
     auto_dir_path: str,
     phy_mtg_data: str,
@@ -1654,6 +1717,10 @@ def plot_time_series(
 
     # gain over period
     results = {}
+    # the series behind the pickled figures, published as contract data
+    gain_shift_series = {}
+    param_series = {}
+    cal_point_rows = []
     for index_i in range(len(period_list)):
         period = period_list[index_i]
         run_list = dataset[period]
@@ -1704,7 +1771,7 @@ def plot_time_series(
         os.makedirs(end_folder, exist_ok=True)
         shelve_path = os.path.join(end_folder, f"l200-{period}-phy-monitoring")
         utils.logger.debug(f"...inspecting gain over {period}")
-        with shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf:
+        with open_shelf(shelve_path) as shelf:
             for plot_type in ["corr", "uncorr"]:
                 for string, det_list in str_chns.items():
                     for channel_name in det_list:
@@ -1770,6 +1837,9 @@ def plot_time_series(
                                 )
                                 plt.plot(x, pul_cusp_av, "C2", label="PULS01ANA")
                                 plt.plot(x, diff_av, "C4", label="GED corrected")
+                                gain_shift_series.setdefault(plot_type, {})[
+                                    channel_name
+                                ] = pulser_data["diff"]["kevdiff_av"]
                             else:
                                 ged_av = pulser_data["ged"]["kevdiff_av"].values.astype(
                                     float
@@ -1793,6 +1863,9 @@ def plot_time_series(
                                     color="dodgerblue",
                                     label="GED uncorrected",
                                 )
+                                gain_shift_series.setdefault(plot_type, {})[
+                                    channel_name
+                                ] = pulser_data["ged"]["kevdiff_av"]
 
                         plt.plot(
                             pars_data["run_start"] - pd.Timedelta(hours=5),
@@ -1800,6 +1873,21 @@ def plot_time_series(
                             "kx",
                             label="FEP gain",
                         )
+                        cal_point_rows += [
+                            {
+                                "detector": channel_name,
+                                "string": string,
+                                "position": pos,
+                                "run_start": start,
+                                "fep_diff": fep,
+                                "cal_const_diff": const,
+                            }
+                            for start, fep, const in zip(
+                                pars_data["run_start"],
+                                pars_data["fep_diff"],
+                                pars_data["cal_const_diff"],
+                            )
+                        ]
                         plt.plot(
                             pars_data["run_start"] - pd.Timedelta(hours=5),
                             pars_data["cal_const_diff"],
@@ -2026,9 +2114,7 @@ def plot_time_series(
                 f"...inspecting {info[inspected_parameter]['title']} over {current_run}"
             )
 
-            with shelve.open(
-                shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL
-            ) as shelf:
+            with open_shelf(shelve_path) as shelf:
                 for string, det_list in str_chns.items():
                     for channel_name in det_list:
                         channel = detectors[channel_name]["channel_str"]
@@ -2113,6 +2199,9 @@ def plot_time_series(
 
                                 plt.plot(x, pul_cusp_av, "C2", label="PULS01ANA")
                                 plt.plot(x, diff_av, "C4", label="GED corrected")
+                                param_series.setdefault(
+                                    inspected_parameter, {}
+                                )[channel_name] = pulser_data["diff"]["kevdiff_av"]
                                 plt.fill_between(
                                     x,
                                     diff_av - diff_std,
@@ -2148,6 +2237,9 @@ def plot_time_series(
                                     color=info[inspected_parameter]["colors"][0],
                                     label="GED uncorrected",
                                 )
+                                param_series.setdefault(
+                                    inspected_parameter, {}
+                                )[channel_name] = pulser_data["ged"]["kevdiff_av"]
                                 plt.fill_between(
                                     x,
                                     vals_av - vals_std,
@@ -2261,6 +2353,16 @@ def plot_time_series(
                             f"{period}_{current_run}_string{string}_pos{pos}_{channel_name}_{info[inspected_parameter]['title']}"
                         ] = serialized_plot
                         plt.close(fig)
+
+    for plot_type, series in gain_shift_series.items():
+        write_stability_series(
+            output_folder, period, current_run, "gain_shift", plot_type, series
+        )
+    for parameter, series in param_series.items():
+        write_stability_series(
+            output_folder, period, current_run, "param_stability", parameter, series
+        )
+    write_cal_points(output_folder, period, current_run, cal_point_rows)
 
     with open(usability_map_file, "w") as f:
         yaml.dump(output, f)

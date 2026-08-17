@@ -296,3 +296,85 @@ def test_write_qc_classifier_fractions_roundtrip(tmp_path):
 
 def test_write_qc_classifier_fractions_skips_empty(tmp_path):
     assert monitoring.write_qc_classifier_fractions(str(tmp_path), "p22", "r012", []) is None
+
+
+# -------------------------------------------------------------------------
+# stability series + the --write-shelves toggle
+# -------------------------------------------------------------------------
+
+
+def test_write_stability_series_frames_by_detector(tmp_path):
+    idx = pd.date_range("2026-08-01", periods=3, freq="1h", tz="UTC")
+    series = {
+        "V01234A": pd.Series([0.1, 0.2, 0.3], index=idx),
+        "V05678B": pd.Series([1.0, 1.1, 1.2], index=idx),
+    }
+    path = monitoring.write_stability_series(
+        str(tmp_path), "p22", "r012", "gain_shift", "corr", series
+    )
+    back = reader.read_frame(path, "gain_shift/corr/r012")
+    assert sorted(back.columns) == ["V01234A", "V05678B"]
+    assert back["V01234A"].tolist() == pytest.approx([0.1, 0.2, 0.3])
+
+
+def test_write_stability_series_drops_empty_detectors(tmp_path):
+    idx = pd.date_range("2026-08-01", periods=2, freq="1h", tz="UTC")
+    series = {
+        "V01234A": pd.Series([1.0, 2.0], index=idx),
+        "V05678B": None,
+        "V09999C": pd.Series(dtype=float),
+    }
+    path = monitoring.write_stability_series(
+        str(tmp_path), "p22", "r012", "param_stability", "Baseline", series
+    )
+    assert list(reader.read_frame(path, "param_stability/Baseline/r012").columns) == [
+        "V01234A"
+    ]
+    # nothing usable at all -> no key written
+    assert (
+        monitoring.write_stability_series(
+            str(tmp_path), "p22", "r012", "gain_shift", "corr", {"V0": None}
+        )
+        is None
+    )
+
+
+def test_write_cal_points_roundtrip(tmp_path):
+    rows = [
+        {
+            "detector": "V01234A",
+            "string": 1,
+            "position": 2,
+            "run_start": pd.Timestamp("2026-08-01", tz="UTC"),
+            "fep_diff": 0.5,
+            "cal_const_diff": -0.2,
+        }
+    ]
+    path = monitoring.write_cal_points(str(tmp_path), "p22", "r012", rows)
+    back = reader.read_frame(path, "cal_points/r012")
+    assert back["fep_diff"].iloc[0] == pytest.approx(0.5)
+    assert monitoring.write_cal_points(str(tmp_path), "p22", "r012", []) is None
+
+
+def test_open_shelf_writes_a_real_shelve_by_default(tmp_path):
+    path = str(tmp_path / "store")
+    with monitoring.open_shelf(path) as shelf:
+        shelf["k"] = b"payload"
+    with monitoring.open_shelf(path) as shelf:
+        assert shelf["k"] == b"payload"
+
+
+def test_open_shelf_drops_writes_when_disabled(tmp_path):
+    """--write-shelves off must produce no pickled output at all."""
+    import glob
+
+    path = str(tmp_path / "store")
+    monitoring.set_write_shelves(False)
+    try:
+        with monitoring.open_shelf(path) as shelf:
+            shelf["k"] = b"payload"
+            # reads behave like an empty store, which callers already handle
+            assert shelf.get("k") is None
+    finally:
+        monitoring.set_write_shelves(True)
+    assert glob.glob(path + "*") == []
