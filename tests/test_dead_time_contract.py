@@ -232,3 +232,67 @@ def test_write_qc_rate_series_skips_empty(tmp_path):
         monitoring.write_qc_rate_series(str(tmp_path), "p22", "r012", "IsDischarge", None)
         is None
     )
+
+
+# -------------------------------------------------------------------------
+# forced-trigger summaries and QC classifier fractions
+# -------------------------------------------------------------------------
+
+
+def test_write_ft_series_accepts_frames_and_series(tmp_path):
+    idx = pd.date_range("2026-08-01", periods=3, freq="1h", tz="UTC")
+    frame = pd.DataFrame({"V01234A": [1.0, 2.0, 3.0]}, index=idx)
+    path = monitoring.write_ft_series(str(tmp_path), "p22", "r012", "per_detector", frame)
+    assert reader.read_frame(path, "ft_summary/per_detector/r012")[
+        "V01234A"
+    ].tolist() == pytest.approx([1.0, 2.0, 3.0])
+
+    # a Series (total_forced, survival_fraction) is named after the quantity
+    series = pd.Series([10.0, 20.0, 30.0], index=idx)
+    monitoring.write_ft_series(str(tmp_path), "p22", "r012", "total_forced", series)
+    back = reader.read_frame(path, "ft_summary/total_forced/r012")
+    assert list(back.columns) == ["total_forced"]
+    assert back["total_forced"].tolist() == pytest.approx([10.0, 20.0, 30.0])
+
+
+def test_write_ft_series_skips_empty(tmp_path):
+    for empty in (None, pd.DataFrame(), pd.Series(dtype=float)):
+        assert (
+            monitoring.write_ft_series(str(tmp_path), "p22", "r012", "per_string", empty)
+            is None
+        )
+
+
+def test_ft_series_quantities_are_separate_keys(tmp_path):
+    idx = pd.date_range("2026-08-01", periods=2, freq="1h", tz="UTC")
+    for name in ("per_detector", "per_string", "total_forced", "survival_fraction"):
+        monitoring.write_ft_series(
+            str(tmp_path), "p22", "r012", name, pd.Series([1.0, 2.0], index=idx)
+        )
+    path = monitoring.period_contract_path(str(tmp_path), "p22")
+    for name in ("per_detector", "per_string", "total_forced", "survival_fraction"):
+        assert not reader.read_frame(path, f"ft_summary/{name}/r012").empty
+
+
+def test_write_qc_classifier_fractions_roundtrip(tmp_path):
+    rows = [
+        {
+            "run": "r012",
+            "classifier": "IsValidCuspemaxClassifier",
+            "detector": "V01234A",
+            "string": 1,
+            "event_type": flag,
+            "percent_in_range": pct,
+            "n_events": 100,
+        }
+        for flag, pct in (("All", 99.5), ("IsPulser", 99.9), ("IsPhysics", 98.0))
+    ]
+    path = monitoring.write_qc_classifier_fractions(str(tmp_path), "p22", "r012", rows)
+    back = reader.read_frame(path, "qc_classifier_frac/r012")
+    assert len(back) == 3
+    assert set(back["event_type"]) == {"All", "IsPulser", "IsPhysics"}
+    assert back.set_index("event_type")["percent_in_range"]["IsPhysics"] == pytest.approx(98.0)
+
+
+def test_write_qc_classifier_fractions_skips_empty(tmp_path):
+    assert monitoring.write_qc_classifier_fractions(str(tmp_path), "p22", "r012", []) is None

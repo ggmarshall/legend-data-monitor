@@ -126,6 +126,25 @@ CALIB_RUNS = utils.CALIB_RUNS
 
 
 # -------------------------------------------------------------------------
+def write_qc_classifier_fractions(
+    output_folder: str, period: str, run: str, rows: list
+) -> str | None:
+    """Write the in-range fractions behind the QC classifier distributions.
+
+    The distributions themselves are already published by the main pipeline as
+    contract ``_dist`` histograms; what only existed inside these figures were
+    the per-(classifier, detector, event type) percentages, so those are what
+    this records.
+    """
+    if not rows:
+        return None
+    path = period_contract_path(output_folder, period)
+    contract_writer.write_frame(
+        path, f"qc_classifier_frac/{run}", pd.DataFrame(rows)
+    )
+    return path
+
+
 def qc_distributions(
     auto_dir_path: str,
     phy_mtg_data: str,
@@ -171,6 +190,7 @@ def qc_distributions(
     )
 
     step = 0.4
+    classifier_rows = []
     with (
         shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf,
         pd.HDFStore(my_file, "r") as store,
@@ -250,6 +270,24 @@ def qc_distributions(
                     perc_bsln = safe_perc(vals_bsln)
                     perc_phys = safe_perc(vals_phys)
 
+                    classifier_rows += [
+                        {
+                            "run": run,
+                            "classifier": par,
+                            "detector": det,
+                            "string": string,
+                            "event_type": flag,
+                            "percent_in_range": float(value),
+                            "n_events": int(len(vals)),
+                        }
+                        for flag, value, vals in (
+                            ("All", perc_all, vals_all),
+                            ("IsPulser", perc_pulser, vals_pulser),
+                            ("IsBsln", perc_bsln, vals_bsln),
+                            ("IsPhysics", perc_phys, vals_phys),
+                        )
+                    ]
+
                     # plotting
                     ax.hist(
                         vals_all,
@@ -320,6 +358,8 @@ def qc_distributions(
                 shelf[f"{period}_{run}_{par}"] = pickle.dumps(fig)
                 plt.close()
 
+    write_qc_classifier_fractions(output_folder, period, run, classifier_rows)
+
 
 def mhz_to_percent(mhz, avg_total_forced_mhz):
     return (mhz / avg_total_forced_mhz) * 100
@@ -327,6 +367,28 @@ def mhz_to_percent(mhz, avg_total_forced_mhz):
 
 def percent_to_mhz(pct, avg_total_forced_mhz):
     return (pct / 100) * avg_total_forced_mhz
+
+
+def write_ft_series(
+    output_folder: str,
+    period: str,
+    run: str,
+    name: str,
+    frame,
+) -> str | None:
+    """Write a forced-trigger monitoring series into the period contract file.
+
+    ``name`` distinguishes the quantities behind the FT figures:
+    ``per_detector`` / ``per_string`` (hourly rates, mHz/kg), ``total_forced``
+    (hourly counts over the array) and ``survival_fraction`` (%).
+    """
+    if frame is None or len(frame) == 0:
+        return None
+    if isinstance(frame, pd.Series):
+        frame = frame.to_frame(name=name)
+    path = period_contract_path(output_folder, period)
+    contract_writer.write_frame(path, f"ft_summary/{name}/{run}", frame)
+    return path
 
 
 def qc_and_evt_summary_plots(
@@ -402,6 +464,7 @@ def qc_and_evt_summary_plots(
     shelve_path = os.path.join(end_folder, f"l200-{period}-{run}-phy-monitoring")
 
     str_counts = {}
+    det_rates = {}
     color_cycle = itertools.cycle(plt.cm.tab20.colors)
 
     # --- all forced triggers (denominator across all strings)
@@ -435,6 +498,7 @@ def qc_and_evt_summary_plots(
                     on_mass += mass
 
                 hourly_rate = daily_cnt[ch] / 3600 * 1000 / mass
+                det_rates[det] = hourly_rate
                 color = next(color_cycle)
                 hourly_rate.plot(ax=ax, drawstyle="steps-mid", label=det, color=color)
 
@@ -516,6 +580,18 @@ def qc_and_evt_summary_plots(
         shelf[f"{period}_{run}_all_strings_FT_failure"] = pickle.dumps(fig)
         plt.close(fig)
 
+        # the numbers behind the FT figures, published as data
+        write_ft_series(
+            output_folder, period, run, "per_detector", pd.DataFrame(det_rates)
+        )
+        write_ft_series(
+            output_folder,
+            period,
+            run,
+            "per_string",
+            pd.DataFrame({str(k): v for k, v in str_counts.items() if v is not None}),
+        )
+
         # --- FT survival fraction ---
         mask_forced = forced.is_forced
         mask_survived = mask_forced & is_bb.is_bb_like & ~is_dis.is_delayed_discharge
@@ -526,6 +602,10 @@ def qc_and_evt_summary_plots(
         total_forced = df_all.resample("h").sum()["count"]
         surviving = df_survived.resample("h").sum()["count"]
         surviving_frac = surviving / total_forced * 100
+        write_ft_series(output_folder, period, run, "total_forced", total_forced)
+        write_ft_series(
+            output_folder, period, run, "survival_fraction", surviving_frac
+        )
 
         fig, ax = plt.subplots(figsize=(12, 6))
         surviving_frac.plot(ax=ax, drawstyle="steps-mid", color="red")
