@@ -43,11 +43,20 @@ def make_subsystem_plots(
     dataset_info: dict,
     plt_path: str,
     saving=None,
+    render: bool = True,
 ):
+    """Build the monitoring data for each configured plot and (optionally) draw it.
 
-    plt_file = utils.get_output_plot_path(plt_path, "pdf")
-    pdf = PdfPages(plt_file)
+    With ``render=False`` the analysis and the HDF output are produced exactly
+    as usual but nothing is drawn: rendering is roughly 40 % of this stage on a
+    full run and the figures can be regenerated later from the contract file,
+    so unattended runs need not pay for them.
+    """
+    pdf = None
     is_pdf_saved = False
+    if render:
+        plt_file = utils.get_output_plot_path(plt_path, "pdf")
+        pdf = PdfPages(plt_file)
 
     for plot_title in plots:
         if "plot_structure" not in plots[plot_title].keys():
@@ -318,23 +327,27 @@ def make_subsystem_plots(
         # call chosen plot structure + plotting
         # -------------------------------------------------------------------------
 
-        if "exposure" in plot_info["parameters"]:
-            string_visualization.exposure_plot(
-                subsystem, data_to_plot.data, plot_info, pdf
-            )
-        else:
-            utils.logger.debug("Plot structure: %s", plot_settings["plot_structure"])
-            plot_structure(data_to_plot.data, plot_info, pdf)
+        if render:
+            if "exposure" in plot_info["parameters"]:
+                string_visualization.exposure_plot(
+                    subsystem, data_to_plot.data, plot_info, pdf
+                )
+            else:
+                utils.logger.debug(
+                    "Plot structure: %s", plot_settings["plot_structure"]
+                )
+                plot_structure(data_to_plot.data, plot_info, pdf)
 
-        # For some reason, after some plotting functions the index is set to "channel".
-        # We need to set it back otherwise string_visualization.py gets crazy.
-        data_to_plot.data = data_to_plot.data.reset_index()
+            # For some reason, after some plotting functions the index is set to
+            # "channel". We need to set it back otherwise string_visualization.py
+            # gets crazy.
+            data_to_plot.data = data_to_plot.data.reset_index()
 
         # -------------------------------------------------------------------------
         # call status plot
         # -------------------------------------------------------------------------
 
-        if "status" in plot_settings and plot_settings["status"]:
+        if render and "status" in plot_settings and plot_settings["status"]:
             if subsystem.type in ["pulser", "pulser01ana", "FCbsln", "muon"]:
                 utils.logger.debug(
                     f"Thresholds are not enabled for {subsystem.type}! Use you own eyes to do checks there"
@@ -368,9 +381,10 @@ def make_subsystem_plots(
             plot_info,
         )
 
-        is_pdf_saved = True
+        is_pdf_saved = render
 
-    pdf.close()
+    if pdf is not None:
+        pdf.close()
     if is_pdf_saved:
         utils.logger.info(
             f"All plots saved in: \33[4m{plt_path}-{subsystem.type}.pdf\33[0m"

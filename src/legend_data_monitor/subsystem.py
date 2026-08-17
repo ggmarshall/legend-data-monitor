@@ -9,6 +9,7 @@ from dbetto import TextDB
 from pygama.flow import DataLoader
 
 from . import errors, utils
+from .loading import phy_files
 
 list_of_str = list[str]
 tuple_of_str = tuple[str]
@@ -110,12 +111,22 @@ class Subsystem:
 
     def get_data(self, parameters: typing.Union[str, list_of_str, tuple_of_str] = ()):
         """
-        Get data for requested parameters from DataLoader and "prime" it to be ready for analysis.
+        Get data for requested parameters and "prime" it to be ready for analysis.
 
         parameters: single parameter or list of parameters to load.
             If empty, only default parameters will be loaded (channel, timestamp; baseline and wfmax for pulser)
+
+        Reads the tiers directly with :mod:`loading.phy_files` unless the
+        ``LMON_LOADER`` environment variable is set to ``dataloader``; the two
+        paths return identical frames, the direct one ~10x faster (monitoring
+        loads whole channels, so ``DataLoader``'s entry-list machinery is pure
+        overhead here).
         """
         utils.logger.info("... getting data")
+
+        if os.environ.get("LMON_LOADER", "direct") != "dataloader":
+            self._get_data_direct(parameters)
+            return
 
         # -------------------------------------------------------------------------
         # Set up DataLoader config
@@ -315,6 +326,95 @@ class Subsystem:
         # -------------------------------------------------------------------------
         # if this subsystem is pulser, flag pulser timestamps
         # -------------------------------------------------------------------------
+
+        if self.type == "pulser":
+            self.flag_pulser_events()
+        if self.type == "FCbsln":
+            self.flag_fcbsln_events()
+        if self.type == "muon":
+            self.flag_muon_events()
+        utils.logger.info("... flagge pulser | FC bsl | muon events")
+
+    def _get_data_direct(self, parameters):
+        """Load the requested parameters by reading the tiers directly.
+
+        Same result as the DataLoader path (verified row-for-row on p22/r012),
+        without building a filedb or per-key entry lists: monitoring wants
+        whole channels for a known file list, so those are pure overhead.
+        """
+        params_for_loader = self.get_parameters_for_dataloader(parameters)
+
+        param_tiers = pd.DataFrame.from_dict(utils.PARAMETER_TIERS.items())
+        param_tiers.columns = ["param", "tier"]
+        known = param_tiers[param_tiers["param"].isin(params_for_loader)]
+        missing = [p for p in params_for_loader if p not in set(param_tiers["param"])]
+        if missing:
+            utils.logger.warning(
+                "\033[93mThe following parameters are not in settings/parameter-tiers.yaml and will be skipped:\033[0m %s",
+                ", ".join(missing),
+            )
+
+        # only load channels that are on or ac (same rule as the DataLoader path)
+        status = self.channel_map["status"]
+        chlist = list(
+            self.channel_map[
+                (status == "on")
+                | (status == "ac")
+                | (status == "True")
+                | (status == True)  # noqa: E712
+            ]["channel"]
+        )
+        removed = list(self.channel_map[status == "off"]["name"])
+        utils.logger.info("...... not loading channels with status off: %s", removed)
+        channels = [f"ch{ch}" for ch in sorted(chlist)]
+
+        now = datetime.now()
+        frames = {}
+        for tier in sorted(set(known["tier"])):
+            tier_params = known[known["tier"] == tier]["param"].tolist()
+            # 'evt' parameters are nested paths (geds/quality/...); read the leaf
+            read_params = [p.split("/")[-1] for p in tier_params]
+            files = phy_files.resolve_files(
+                self.path,
+                self.version,
+                tier,
+                self.datatype,
+                self.period,
+                self.timerange,
+                experiment=self.experiment,
+            )
+            if not files:
+                utils.logger.warning(
+                    "\033[93mno '%s' files found for the requested time range\033[0m",
+                    tier,
+                )
+                continue
+            utils.logger.debug("...... reading %d '%s' files", len(files), tier)
+            frames[tier] = phy_files.load_channel_frame(
+                files, tier, channels, read_params
+            )
+
+        self.data = phy_files.merge_tiers(frames)
+        if self.data.empty:
+            utils.logger.error(
+                "\033[91mno data loaded for the requested parameters. Exit here.\033[0m"
+            )
+            raise errors.DataError("get_data failed (see log for details)")
+        utils.logger.info(f"Total time to load data: {(datetime.now() - now)}")
+
+        self.data["datetime"] = pd.to_datetime(
+            self.data["timestamp"], origin="unix", utc=True, unit="s"
+        )
+        self.data = self.data.drop("timestamp", axis=1)
+
+        utils.logger.info("... mapping to name and string/fiber position")
+        self.data = self.data.set_index("channel")
+        self.data = self.data.join(self.channel_map.set_index("channel"), how="left")
+        self.data = self.data.reset_index()
+        for col in ["location", "position"]:
+            if isinstance(self.data[col].iloc[0], float):
+                self.data[col] = self.data[col].astype(int)
+        utils.logger.info("... appended channel map to the data dataframe")
 
         if self.type == "pulser":
             self.flag_pulser_events()

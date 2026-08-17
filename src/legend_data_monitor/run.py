@@ -288,6 +288,14 @@ def add_auto_run_parser(subparsers):
         default=False,
         help="True if you want to save pdf files too; default: False",
     )
+    parser_auto_run.add_argument(
+        "--plots",
+        default="on",
+        choices=["on", "off"],
+        help="Render subsystem plots ('off' produces the monitoring data only, "
+        "roughly 40%% faster; regenerate figures later from the contract file). "
+        "Default: on.",
+    )
 
     parser_auto_run.set_defaults(func=auto_run_cli)
 
@@ -325,6 +333,7 @@ def auto_run_cli(args):
         escale_val,
         data_type,
         prod_root=args.prod_root,
+        render_plots=args.plots == "on",
     )
 
 

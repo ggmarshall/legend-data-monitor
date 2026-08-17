@@ -29,6 +29,7 @@ def auto_run(
     escale_val,
     data_type,
     prod_root=None,
+    render_plots=True,
 ):
     """Inspect LEGEND HDF5 (LH5) processed data (and Slow Control data from lngs-login cluster) for a specific period and run (if specified; otherwise the latest being processed are used) and save plots and summary files.
 
@@ -229,11 +230,15 @@ def auto_run(
                 utils.logger.debug(
                     f"[{idx}/{total_parts}] Created file: {output_file} with {len(chunk)} lines."
                 )
-                core.auto_control_plots(my_config, output_file, "", {})
+                core.auto_control_plots(
+                    my_config, output_file, "", {}, render=render_plots
+                )
                 plt.close("all")
         else:
             utils.logger.debug(f"... file has {num_lines} lines. No need to split.")
-            core.auto_control_plots(my_config, keys_file, "", {})
+            core.auto_control_plots(
+                my_config, keys_file, "", {}, render=render_plots
+            )
 
     def task_build_monitoring_hdf(logger=None):
         files_folder = os.path.join(output_folder, ref_version)
