@@ -1142,7 +1142,7 @@ def check_calibration(
 
 
 def write_fep_gain_contract(
-    output_folder: str, period: str, run: str, fep_stats: dict
+    output_folder: str, period: str, run: str, fep_stats: dict, data_type: str = "cal"
 ) -> str | None:
     """Write per-detector FEP gain stability into the period contract file.
 
@@ -1173,7 +1173,7 @@ def write_fep_gain_contract(
         return None
 
     file_path = os.path.join(
-        output_folder, period, f"l200-{period}-cal-monitoring.hdf"
+        output_folder, period, f"l200-{period}-{data_type}-monitoring.hdf"
     )
     key = f"fep_gain_stab/{run}"
     contract_writer.write_frame(file_path, key, pd.DataFrame(rows))
@@ -1340,6 +1340,10 @@ def check_calibration_lac_ssc(
             utils.update_evaluation_in_memory(
                 output, ged, data_type, "FEP_gain_stab", stable
             )
+
+    write_fep_gain_contract(
+        output_folder, period, run, fep_stats, data_type=data_type
+    )
 
     # plot
     monitoring.box_summary_plot(
