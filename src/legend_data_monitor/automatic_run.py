@@ -253,7 +253,22 @@ def auto_run(
             metadata_path=os.path.join(auto_dir_path, "inputs"),
             data_type=data_type,
         )
-        _render_headline_pngs(files_folder, period, run, data_type, logger)
+
+    def task_render_plots(logger=None):
+        """Draw the run's figures from the contract file.
+
+        Separate from the data tasks on purpose: it reads only the contract,
+        so it is cheap, it can be skipped (--plots off) and re-run later with
+        `legend-data-monitor plot_run` without touching the production tree.
+        """
+        saved = render_run_plots(
+            os.path.join(output_folder, ref_version),
+            period,
+            run,
+            data_type,
+            logger,
+        )
+        utils.logger.info("...rendered %d figure(s)", len(saved))
 
     def task_slow_control(logger=None):
         core.retrieve_scdb(scdb, port, pswd)
@@ -309,11 +324,15 @@ def auto_run(
     task_list = [tasks.Task("check_calibration", task_check_calibration, period, run)]
     if new_files:
         task_list.append(
-            tasks.Task("subsystem_plots", task_subsystem_plots, period, run)
+            tasks.Task("build_subsystem_data", task_subsystem_plots, period, run)
         )
         task_list.append(
             tasks.Task("build_monitoring_hdf", task_build_monitoring_hdf, period, run)
         )
+        if render_plots:
+            task_list.append(
+                tasks.Task("render_plots", task_render_plots, period, run)
+            )
         if cluster == "lngs" and get_sc is True:
             task_list.append(tasks.Task("slow_control", task_slow_control, period, run))
         task_list.append(
@@ -354,14 +373,32 @@ HEADLINE_PNG_KEYS = [
 ]
 
 
-def _render_headline_pngs(files_folder, period, run, data_type, logger=None):
-    """Render per-string PNGs for the headline keys from the contract-v2 file.
+def render_run_plots(
+    files_folder: str,
+    period: str,
+    run: str,
+    data_type: str = "phy",
+    logger=None,
+) -> list:
+    """Render a run's per-string PNGs from its contract-v2 file.
+
+    Reads only the contract file, so it needs no access to the production
+    tree: figures for a run processed with ``--plots off`` can be regenerated
+    afterwards in seconds (``legend-data-monitor plot_run``).
 
     The SAVED_PLOT log lines these emit are the attachment source for
     unattended agents (see docs/auto-giorgio-integration.md).
+
+    Returns
+    -------
+    list
+        Absolute paths of the figures written.
     """
     import pandas as pd
 
+    # SAVED_PLOT lines are a consumer contract, so always announce on some
+    # logger; the per-task one when running in the pipeline, else the package's
+    logger = logger if logger is not None else utils.logger
     run_dir = os.path.join(
         files_folder, "generated/plt/hit", data_type, period, run
     )
@@ -370,8 +407,9 @@ def _render_headline_pngs(files_folder, period, run, data_type, logger=None):
     )
     if not os.path.isfile(v2_file):
         utils.logger.warning("no contract-v2 file to render PNGs from: %s", v2_file)
-        return
+        return []
     detector_map = pd.read_hdf(v2_file, "detector_map")
+    saved = []
     for flag, param, unit in HEADLINE_PNG_KEYS:
         try:
             binned = contract_reader.read_binned_series(v2_file, flag, param, "10min")
@@ -379,7 +417,7 @@ def _render_headline_pngs(files_folder, period, run, data_type, logger=None):
             utils.logger.debug("...no %s_%s in %s, skip PNG", flag, param, v2_file)
             continue
         for string, group in detector_map.groupby("string"):
-            contract_plots.plot_binned_series(
+            saved += contract_plots.plot_binned_series(
                 binned,
                 run_dir,
                 f"{flag}_{param}_st{int(string):02d}",
@@ -388,6 +426,11 @@ def _render_headline_pngs(files_folder, period, run, data_type, logger=None):
                 detectors=list(group["name"]),
                 logger=logger,
             )
+    return saved
+
+
+# kept as the in-pipeline name; plot_run calls render_run_plots directly
+_render_headline_pngs = render_run_plots
 
 
 def _qcp_file_is_populated(filepath: str) -> bool:

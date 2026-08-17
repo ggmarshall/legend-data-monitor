@@ -20,8 +20,11 @@ Per unattended invocation (`legend-data-monitor auto_run`):
 - Task logs contain parseable blocks:
   `ERROR in task <task> (period=<p>, run=<r>):` … full traceback … `END ERROR`
   and `ISSUE detector=<det> metric=<m> severity=<sev> (period=…, run=…, datatype=…):` … `END ISSUE`.
-- Tasks: `check_calibration`, `subsystem_plots`, `build_monitoring_hdf`,
-  `slow_control`, `phy_summary_plots`, `qc_plots`.
+- Tasks: `check_calibration`, `build_subsystem_data`, `build_monitoring_hdf`,
+  `render_plots`, `slow_control`, `phy_summary_plots`, `qc_plots`. The data
+  tasks never draw; `render_plots` reads only the contract file and is absent
+  when a run was processed with `--plots off` (regenerate afterwards with
+  `legend-data-monitor plot_run`).
 - Issue records (JSONL, one object per line, `"schema": 1`):
   `issue_id` (`<p>-<r>-<dt>-<detector>-<metric>`, the dedup key), `severity`
   (`warning|alert`), `detector`/`rawid`/`string`/`position`, `metric`,
