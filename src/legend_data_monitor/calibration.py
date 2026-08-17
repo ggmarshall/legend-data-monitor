@@ -10,6 +10,7 @@ import pandas as pd
 import yaml
 
 from . import monitoring, plotting, utils
+from .contract import writer as contract_writer
 
 
 # -------------------------------------------------------------------------
@@ -772,6 +773,48 @@ def check_psd(
         yaml.dump(psd_data, f, sort_keys=False)
 
 
+def compute_fep_gain_variation(
+    timestamps: np.ndarray,
+    values: np.ndarray,
+    bin_size: int = 600,
+    min_counts: int = 5,
+    escale: float = 2039.0,
+) -> dict:
+    """Bin FEP energies in time and express the drift in keV at ``escale``.
+
+    Pure computation behind the FEP gain-stability figure: bins of
+    ``bin_size`` seconds, per-bin mean/std/count, bins with fewer than
+    ``min_counts`` entries blanked, and the drift of each bin mean from the
+    run's baseline (the first valid bin, else the last).
+
+    Returns
+    -------
+    dict
+        ``bins`` (edges), ``stats`` (per-bin time/mean/std/count),
+        ``baseline`` and ``drift`` (keV at ``escale``; ``None`` when no bin has
+        enough entries to define a baseline).
+    """
+    bins = np.arange(0, timestamps.max() + bin_size, bin_size)
+    bin_idx = np.digitize(timestamps, bins) - 1  # shift to 0-based
+
+    df = pd.DataFrame({"time": timestamps, "value": values, "bin": bin_idx})
+    stats = df.groupby("bin")["value"].agg(["mean", "std", "count"]).reset_index()
+    stats["time"] = bins[stats["bin"]] + bin_size / 2
+    stats.loc[stats["count"] < min_counts, ["mean", "std"]] = np.nan
+
+    valid_means = stats["mean"].dropna()
+    baseline = None
+    drift = None
+    if not valid_means.empty:
+        baseline = (
+            stats["mean"].iloc[0]
+            if pd.notna(stats["mean"].iloc[0])
+            else valid_means.iloc[-1]
+        )
+        drift = (stats["mean"] - baseline) / baseline * escale
+    return {"bins": bins, "stats": stats, "baseline": baseline, "drift": drift}
+
+
 def fep_gain_variation(
     period: str,
     run: str,
@@ -781,7 +824,8 @@ def fep_gain_variation(
     values: np.ndarray,
     output_dir: str,
     save_pdf: bool,
-    shelf: shelve.Shelf,
+    shelf: shelve.Shelf | None,
+    render: bool = True,
 ):
     """
     Compute and plot FEP gain variation for a single detector; optional pdf saving; store a serialized plot in a shelve object.
@@ -807,39 +851,31 @@ def fep_gain_variation(
     shelf : shelve.Shelf
         Open shelve object where serialized plots will be stored.
     """
-    monitoring.apply_monitoring_style()
     ged = chmap["name"]
     string = chmap["string"]
     position = chmap["position"]
 
-    bin_size = 600
-    bins = np.arange(0, timestamps.max() + bin_size, bin_size)
-
-    bin_idx = np.digitize(timestamps, bins) - 1  # shift to 0-based
-
-    df = pd.DataFrame({"time": timestamps, "value": values, "bin": bin_idx})
-
-    stats = df.groupby("bin")["value"].agg(["mean", "std", "count"]).reset_index()
-    stats["time"] = bins[stats["bin"]] + bin_size / 2
-
     min_counts = 5
-    stats.loc[stats["count"] < min_counts, ["mean", "std"]] = np.nan
+    computed = compute_fep_gain_variation(
+        timestamps, values, bin_size=600, min_counts=min_counts
+    )
+    bins = computed["bins"]
+    stats = computed["stats"]
+    baseline = computed["baseline"]
+    means = computed["drift"]
+    valid_means = stats["mean"].dropna()
 
+    if not render:
+        return means, computed
+
+    monitoring.apply_monitoring_style()
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    # Choose baseline: first mean if valid, otherwise last valid mean
-    valid_means = stats["mean"].dropna()
     if not valid_means.empty:
-        if pd.notna(stats["mean"].iloc[0]):
-            baseline = stats["mean"].iloc[0]
-        else:
-            baseline = stats["mean"].dropna().iloc[-1]
-
         norm_values = (values - baseline) / baseline * 2039
 
         x_bins = bins
         y_bins = np.linspace(-10, 10, 40)
-        means = (stats["mean"] - baseline) / baseline * 2039
 
         ax.hist2d(timestamps, norm_values, bins=(x_bins, y_bins), cmap="Blues")
         fig.colorbar(ax.collections[0], label="Counts")
@@ -879,16 +915,17 @@ def fep_gain_variation(
         )
 
     # store the serialized plot in a shelve object under key
-    serialized_plot = pickle.dumps(plt.gcf())
-    shelf[f"{period}_{run}_str{string}_pos{position}_{ged}_FEP_gain_stab"] = (
-        serialized_plot
-    )
+    if shelf is not None:
+        serialized_plot = pickle.dumps(plt.gcf())
+        shelf[f"{period}_{run}_str{string}_pos{position}_{ged}_FEP_gain_stab"] = (
+            serialized_plot
+        )
     plt.close()
 
     if valid_means.empty:
-        return None
+        return None, computed
 
-    return means
+    return means, computed
 
 
 def check_calibration(
@@ -926,6 +963,7 @@ def check_calibration(
     )
     output = utils.load_yaml_or_default(usability_map_file, detectors)
     fep_mean_results = {}
+    fep_stats = {}
 
     directory = os.path.join(tmp_auto_dir, "generated/par/hit/cal", period, run)
     files = sorted(glob.glob(os.path.join(directory, "*par_hit.yaml")))
@@ -1003,7 +1041,7 @@ def check_calibration(
             timestamps -= timestamps[0]
             energies = hit_files_data[mask].cuspEmax_ctc_cal.to_numpy()
 
-            fep_mean_results[ged] = fep_gain_variation(
+            fep_mean_results[ged], fep_stats[ged] = fep_gain_variation(
                 period,
                 run,
                 pars=pars[ged],
@@ -1097,8 +1135,50 @@ def check_calibration(
         save_pdf,
     )
 
+    write_fep_gain_contract(output_folder, period, run, fep_stats)
+
     with open(usability_map_file, "w") as f:
         yaml.dump(output, f)
+
+
+def write_fep_gain_contract(
+    output_folder: str, period: str, run: str, fep_stats: dict
+) -> str | None:
+    """Write per-detector FEP gain stability into the period contract file.
+
+    The same numbers the FEP figure is drawn from, in a form that can be read
+    without unpickling a matplotlib figure (see contract/reader.read_frame).
+    """
+    rows = []
+    for detector, computed in fep_stats.items():
+        if not computed:
+            continue
+        stats = computed["stats"]
+        drift = computed["drift"]
+        for i, bin_row in stats.iterrows():
+            rows.append(
+                {
+                    "detector": detector,
+                    "run": run,
+                    "time_s": float(bin_row["time"]),
+                    "mean": float(bin_row["mean"]),
+                    "std": float(bin_row["std"]),
+                    "count": int(bin_row["count"]),
+                    "drift_kev": (
+                        float(drift.iloc[i]) if drift is not None else float("nan")
+                    ),
+                }
+            )
+    if not rows:
+        return None
+
+    file_path = os.path.join(
+        output_folder, period, f"l200-{period}-cal-monitoring.hdf"
+    )
+    key = f"fep_gain_stab/{run}"
+    contract_writer.write_frame(file_path, key, pd.DataFrame(rows))
+    utils.logger.debug("...wrote %s to %s", key, file_path)
+    return file_path
 
 
 def check_calibration_lac_ssc(
@@ -1140,6 +1220,7 @@ def check_calibration_lac_ssc(
     )
     output = utils.load_yaml_or_default(usability_map_file, detectors)
     fep_mean_results = {}
+    fep_stats = {}
 
     directory = os.path.join(
         tmp_auto_dir, "generated/par/hit/cal", period, run_to_apply
@@ -1172,6 +1253,7 @@ def check_calibration_lac_ssc(
     )
     output = utils.load_yaml_or_default(usability_map_file, detectors)
     fep_mean_results = {}
+    fep_stats = {}
 
     available_channels = set(lh5.ls(hit_files[0], ""))
 
@@ -1202,7 +1284,7 @@ def check_calibration_lac_ssc(
             timestamps -= timestamps[0]
             energies = hit_files_data[mask].cuspEmax_ctc_cal.to_numpy()
 
-            fep_mean_results[ged] = fep_gain_variation(
+            fep_mean_results[ged], fep_stats[ged] = fep_gain_variation(
                 period,
                 run,
                 pars=pars[ged],
