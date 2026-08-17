@@ -5,6 +5,7 @@ import shelve
 
 import lh5
 import matplotlib.pyplot as plt
+import awkward as ak
 import numpy as np
 import pandas as pd
 import yaml
@@ -922,6 +923,92 @@ def fep_gain_variation(
     return means, computed
 
 
+#: minimum populated bins before dataflow's stability arrays can replace
+#: lmon's own event pass — see read_dataflow_stability
+DATAFLOW_STABILITY_MIN_BINS = 5
+
+
+def read_dataflow_stability(
+    tmp_auto_dir: str,
+    period: str,
+    run: str,
+    detector: str,
+    estimator: str = "cuspEmax_ctc_cal",
+    key: str = "2614_stability",
+    data_type: str = "cal",
+) -> dict | None:
+    """FEP/pulser stability arrays already computed by production dataflow.
+
+    dataflow bins the same quantity lmon re-derives (``bin_stability`` in
+    legend-dataflow-scripts) and ships it in the plt tier as
+    ``{time, energy, spread}``. Reusing it would remove lmon's per-detector
+    event pass entirely.
+
+    **Not usable as of prod-blind auto/v2.0.0**: the arrays are binned in 180 s
+    slices, which for a single calibration run leaves almost every bin empty --
+    measured on p22/r012, the median detector has 1 populated bin out of 87 and
+    *no* detector reaches ``DATAFLOW_STABILITY_MIN_BINS``. Once dataflow bins
+    coarsely enough (or exports counts per bin), this becomes the fast path;
+    until then callers fall back to the event pass. Returns None when the
+    shelve, the detector or the key is missing.
+    """
+    import shelve
+
+    pattern = os.path.join(
+        tmp_auto_dir, "generated/plt/hit", data_type, period, run, "*-plt_hit.dat"
+    )
+    matches = sorted(glob.glob(pattern))
+    if not matches:
+        return None
+    try:
+        with shelve.open(matches[0].removesuffix(".dat"), "r") as shelf:
+            entry = shelf.get(detector)
+    except Exception as exc:  # unpicklable (matplotlib version drift), corrupt, ...
+        utils.logger.debug("...cannot read dataflow stability: %s", exc)
+        return None
+    if not entry:
+        return None
+    arrays = (entry.get("ecal", {}).get(estimator, {}) or {}).get(key)
+    if not arrays:
+        return None
+    return {name: np.asarray(values) for name, values in arrays.items()}
+
+
+def dataflow_stability_usable(
+    arrays: dict | None, min_bins: int = DATAFLOW_STABILITY_MIN_BINS
+) -> bool:
+    """Whether dataflow's arrays carry enough populated bins to be trusted."""
+    if not arrays or "energy" not in arrays:
+        return False
+    energy = np.asarray(arrays["energy"], dtype=float)
+    return int(np.count_nonzero(~np.isnan(energy))) >= min_bins
+
+
+def read_channel_events(files: list, channel: str, fields: list):
+    """Read one channel's cal events across ``files``.
+
+    Reads a file per call and concatenates: handing ``lh5.read_as`` the whole
+    file list is ~10x slower for the same rows (measured on p22/r012, 20
+    detectors x 6 hit files: 21.2 s vs 2.1 s).
+    """
+    chunks = []
+    for path in files:
+        try:
+            chunk = lh5.read_as(
+                channel + "/hit/", [path], library="ak", field_mask=fields
+            )
+        except (KeyError, ValueError) as exc:
+            utils.logger.debug(
+                "skipping %s in %s: %s", channel, os.path.basename(path), exc
+            )
+            continue
+        if chunk is not None and len(chunk):
+            chunks.append(chunk)
+    if not chunks:
+        return None
+    return ak.concatenate(chunks) if len(chunks) > 1 else chunks[0]
+
+
 def check_calibration(
     tmp_auto_dir: str,
     output_folder: str,
@@ -1017,12 +1104,13 @@ def check_calibration(
             if item["channel_str"] not in available_channels:
                 continue
 
-            hit_files_data = lh5.read_as(
-                item["channel_str"] + "/hit/",
+            hit_files_data = read_channel_events(
                 hit_files,
-                library="ak",
-                field_mask=["cuspEmax_ctc_cal", "timestamp", "is_valid_cal"],
+                item["channel_str"],
+                ["cuspEmax_ctc_cal", "timestamp", "is_valid_cal"],
             )
+            if hit_files_data is None:
+                continue
 
             mask = (
                 hit_files_data.is_valid_cal
@@ -1260,12 +1348,13 @@ def check_calibration_lac_ssc(
             if item["channel_str"] not in available_channels:
                 continue
 
-            hit_files_data = lh5.read_as(
-                item["channel_str"] + "/hit/",
+            hit_files_data = read_channel_events(
                 hit_files,
-                library="ak",
-                field_mask=["cuspEmax_ctc_cal", "timestamp", "is_valid_cal"],
+                item["channel_str"],
+                ["cuspEmax_ctc_cal", "timestamp", "is_valid_cal"],
             )
+            if hit_files_data is None:
+                continue
 
             mask = (
                 hit_files_data.is_valid_cal
