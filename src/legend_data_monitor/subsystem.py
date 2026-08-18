@@ -93,6 +93,32 @@ def clear_aux_cache() -> None:
     _AUX_CACHE.clear()
 
 
+def compact_channel_map_columns(df, columns):
+    """Shrink per-channel metadata joined onto every event row.
+
+    The channel map contributes constants (detector name, string, position,
+    HV card, CC4 id, ...) that get repeated once per event. Left as object
+    columns they dominate the frame: on a 5-file p22 load they were 85 % of
+    446 MB, against 3.6 % for the parameters themselves. Numeric columns are
+    downcast and the rest become categoricals, which is ~13x smaller with
+    identical values.
+    """
+    for col in columns:
+        if col not in df.columns:
+            continue
+        series = df[col]
+        if series.dtype != object and str(series.dtype) != "str":
+            continue
+        numeric = pd.to_numeric(series, errors="coerce")
+        if numeric.notna().sum() == series.notna().sum():
+            # ints stored as objects (location/position) and floats alike
+            df[col] = pd.to_numeric(numeric, downcast="integer")
+        else:
+            # names, HV ids, detector types: few distinct values, many rows
+            df[col] = series.astype("category")
+    return df
+
+
 class Subsystem:
     """
     Object containing information for a given subsystem such as channel map, channels status etc.
@@ -399,6 +425,9 @@ class Subsystem:
             # ignore string values for fibers ('I/OB-XXX-XXX') and positions ('top/bottom') for SiPMs
             if isinstance(self.data[col].iloc[0], float):
                 self.data[col] = self.data[col].astype(int)
+        self.data = compact_channel_map_columns(
+            self.data, list(self.channel_map.columns)
+        )
         utils.logger.info("... appended channel map to the data dataframe")
 
         # -------------------------------------------------------------------------
@@ -492,6 +521,9 @@ class Subsystem:
         for col in ["location", "position"]:
             if isinstance(self.data[col].iloc[0], float):
                 self.data[col] = self.data[col].astype(int)
+        self.data = compact_channel_map_columns(
+            self.data, list(self.channel_map.columns)
+        )
         utils.logger.info("... appended channel map to the data dataframe")
 
         if self.type == "pulser":

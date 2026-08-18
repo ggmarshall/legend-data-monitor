@@ -5,6 +5,7 @@ Subsystem and re-read pulser01ana -- 6 redundant loads per chunk on the
 production config.
 """
 
+import numpy as np
 import pytest
 
 from legend_data_monitor import subsystem
@@ -144,3 +145,50 @@ def test_prewarm_loads_the_union_in_one_call(monkeypatch):
     )
     # a single call carrying the de-duplicated union, not one call per parameter
     assert loaded == [["baseline", "bl_std"]]
+
+
+# -------------------------------------------------------------------------
+# channel-map metadata is compacted after the join
+# -------------------------------------------------------------------------
+
+
+def test_channel_map_columns_are_compacted():
+    """Per-channel constants repeated over millions of rows dominated the frame.
+
+    On a 5-file p22 load they were 85% of 446 MB against 3.6% for the
+    parameters; downcasting/categorising them is ~13x smaller.
+    """
+    import pandas as pd
+
+    n = 10_000
+    df = pd.DataFrame(
+        {
+            "baseline": np.linspace(0, 1, n),
+            "name": ["V01234A"] * n,          # few distinct values, many rows
+            "location": [str(i % 3 + 1) for i in range(n)],  # ints stored as objects
+            "det_type": ["bege"] * n,
+        }
+    )
+    meta = ["name", "location", "det_type"]
+    before = df.memory_usage(deep=True)[meta].sum()
+    out = subsystem.compact_channel_map_columns(df.copy(), meta)
+    after = out.memory_usage(deep=True)[meta].sum()
+
+    # the metadata is what dominated the frame; it must shrink sharply
+    assert after < before / 5, (before, after)
+    # numeric-looking metadata becomes numeric, the rest categorical
+    assert out["location"].dtype.kind in "iu"
+    assert str(out["name"].dtype) == "category"
+    # values survive, and the parameter column is untouched
+    assert out["name"].astype(str).tolist() == df["name"].tolist()
+    assert out["location"].astype(int).tolist() == [int(v) for v in df["location"]]
+    assert out["baseline"].equals(df["baseline"])
+
+
+def test_compaction_ignores_missing_and_already_typed_columns():
+    import pandas as pd
+
+    df = pd.DataFrame({"a": [1, 2, 3], "name": ["x", "y", "z"]})
+    out = subsystem.compact_channel_map_columns(df.copy(), ["name", "not_present"])
+    assert str(out["name"].dtype) == "category"
+    assert out["a"].dtype == df["a"].dtype  # numeric column left alone

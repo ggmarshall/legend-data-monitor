@@ -204,6 +204,7 @@ def auto_run(
             data_type=data_type,
             partition=partition,
             save_pdf=save_pdf,
+            render=render_plots,
         )
         utils.logger.info("...done!")
 
@@ -625,6 +626,7 @@ def check_calib(
     data_type: str = "phy",
     partition: bool = False,
     save_pdf: bool = False,
+    render: bool = True,
 ):
     """
     Check calibration stability in calibration runs and create monitoring summary file.
@@ -693,6 +695,7 @@ def check_calib(
             first_run,
             det_info,
             save_pdf,
+            render=render,
         )
         calibration.check_psd(
             auto_dir_path,

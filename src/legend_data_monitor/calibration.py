@@ -1017,6 +1017,7 @@ def check_calibration(
     first_run: bool,
     det_info: dict,
     save_pdf=False,
+    render: bool = True,
 ):
     """
     Check calibration stability for a given run and update monitoring summary YAML file.
@@ -1133,6 +1134,7 @@ def check_calibration(
                 output_dir=output_folder,
                 save_pdf=save_pdf,
                 shelf=shelf,
+                render=render,
             )
 
             # build summary in memory
@@ -1377,6 +1379,7 @@ def check_calibration_lac_ssc(
                 output_dir=output_folder,
                 save_pdf=save_pdf,
                 shelf=shelf,
+                render=render,
             )
 
             # build summary in memory
