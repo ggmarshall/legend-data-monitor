@@ -55,18 +55,20 @@ with open(pkg / "settings" / "final-calibrations.yaml") as f:
     CALIB_RUNS = yaml.load(f, Loader=yaml.CLoader)
 
 # load list of columns to load for a dataframe
+# Channel-map columns carried alongside every event row. Keep this minimal:
+# these are per-detector constants repeated once per event, so each one costs
+# memory proportional to the number of events, not the number of detectors.
+# Anything a consumer only needs per detector (HV card/channel, DAQ crate/card,
+# detector type, ...) belongs in the channel map itself -- the contract file
+# publishes it as /detector_map -- not here.
 COLUMNS_TO_LOAD = [
     "name",
     "location",
     "channel",
     "position",
+    # cc4_id/cc4_channel are read by the "per cc4" plot structure
     "cc4_id",
     "cc4_channel",
-    "daq_crate",
-    "daq_card",
-    "HV_card",
-    "HV_channel",
-    "det_type",
 ]
 
 # map position/location for special systems
