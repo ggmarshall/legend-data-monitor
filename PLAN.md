@@ -57,6 +57,8 @@ Two known-unverified areas that real data will exercise for the first time: the 
 3. `.venv/bin/dashboard <dev-config>` (or `panel serve`) on a chosen port; from the laptop: `ssh -L 5063:localhost:<port> lngs-login` and browse. Verify: phy view uses v2 (σ bands / min-max envelopes / cadence label on the x-axis) on runs with manifests, falls back to v1 elsewhere; Histogram view works (fed by the v2 `_dist` histograms); string/sort selectors from real metadata; SC overlay if the slow-control HDF exists.
 4. Sanity-compare a couple of runs against the production dashboard.
 
+**STATUS: performance + Phase-5c pass verified** (2026-08-18): p22/r012 rerun clean against the golden snapshot — exit 0, **3 h 11 m (was 5 h 00 m)**, peak RSS **17.3 GB (was 24 GB)**, 196/200 v1 keys byte-identical and all contract keys/manifest identical. The 4 differing keys are a **pre-existing data-corruption bug now fixed**: the DataLoader path wrote uninitialised memory (denormals ~1.5e-319) for 6 detectors that lack `is_valid_bl_poly_rms_classifier`; the direct loader yields NaN. Worth raising with the collaboration — that garbage also reached the old dashboard. See REFACTOR_STATUS.md for detail.
+
 ## Phase R4 — follow-ups unlocked by this move (not in this pass)
 
 - Phase 5c: rewrite the cal/monitoring pickled-shelve generators using the real cal data now available; the R2 error blocks define the worklist.

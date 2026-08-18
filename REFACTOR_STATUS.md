@@ -46,6 +46,32 @@ working). Settings constants → `config/settings.py` (single source of key voca
   `SAVED_PLOT` log lines.
 - 21 contract tests incl. plain-h5py (no lmon import) compatibility.
 
+## Full-run verification (2026-08-18)
+
+p22/r012 rerun end to end into a fresh tree and diffed against the pre-change
+golden snapshot: **exit 0, 3 h 11 m (was 5 h 00 m), peak RSS 17.3 GB (was 24
+GB)**. 196/200 v1 HDF keys byte-identical, 340/340 contract hist keys and the
+manifest identical, plus the new period-contract keys and figures.
+
+Two differences, both explained:
+
+1. **A data-corruption bug in the old loader, fixed.** The 4 non-identical keys
+   are all `*_IsValidBlPolyRmsClassifier`, differing only for 6 detectors
+   (rawids 1080003, 1105602, 1107203, 1108802, 1112000, 1112001). Those
+   channels genuinely lack `is_valid_bl_poly_rms_classifier` in the hit tier
+   (they carry `is_valid_bl_poly_rms`). The DataLoader path filled them with
+   uninitialised memory — denormals around 1.5e-319 against a real
+   -5.19..6315.89 range — which reached the v1 file, the contract and the
+   dashboard. The direct loader yields NaN; pinned by
+   `tests/test_direct_loader.py`.
+2. `qcp` cal differs for one detector (V09724A) because `check_escale` builds
+   each detector's multi-run band from `os.listdir()` over the **live** `/data2`
+   tree, and r014 landed after the golden was taken.
+
+**Golden diffs must therefore separate static outputs (r012 phy data, which
+must match) from cal-history-derived outputs (which legitimately drift as
+production adds runs).**
+
 ## Remaining
 
 1. **Pickled-figure shelve writers** in `monitoring.py` (qc_distributions,
