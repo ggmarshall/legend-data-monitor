@@ -15,6 +15,47 @@ list_of_str = list[str]
 tuple_of_str = tuple[str]
 
 
+#: cache of loaded aux subsystems, keyed by (channel, dataset, parameter).
+#: include_aux is called once per configured plot, and each call used to
+#: re-instantiate and re-read the aux channel: 6 redundant loads per chunk on
+#: the production config, 10 DataLoader setups per chunk where ~5 suffice.
+_AUX_CACHE: dict = {}
+
+
+def _aux_cache_key(aux_channel, dataset, param):
+    time_key = dataset.get("timestamps") or dataset.get("runs") or dataset.get("start")
+    if isinstance(time_key, list):
+        time_key = tuple(time_key)
+    return (
+        aux_channel,
+        dataset.get("period"),
+        dataset.get("version"),
+        dataset.get("type"),
+        time_key,
+        param if isinstance(param, str) else tuple(param),
+    )
+
+
+def _aux_subsystem(aux_channel, dataset, param):
+    """Load the aux channel once per (channel, dataset, parameter)."""
+    key = _aux_cache_key(aux_channel, dataset, param)
+    cached = _AUX_CACHE.get(key)
+    if cached is not None:
+        utils.logger.debug("...... reusing cached %s data", aux_channel)
+        return cached
+    aux_subsys = Subsystem(aux_channel, dataset=dataset)
+    # get data for these parameters and time range given in the dataset
+    # (if no parameters given to plot, baseline and wfmax will always be loaded to flag pulser events anyway)
+    aux_subsys.get_data(param)
+    _AUX_CACHE[key] = aux_subsys
+    return aux_subsys
+
+
+def clear_aux_cache() -> None:
+    """Drop cached aux subsystems (between chunks/runs, and in tests)."""
+    _AUX_CACHE.clear()
+
+
 class Subsystem:
     """
     Object containing information for a given subsystem such as channel map, channels status etc.
@@ -454,10 +495,7 @@ class Subsystem:
             )
 
         def add_aux(param):
-            aux_subsys = Subsystem(aux_channel, dataset=dataset)
-            # get data for these parameters and time range given in the dataset
-            # (if no parameters given to plot, baseline and wfmax will always be loaded to flag pulser events anyway)
-            aux_subsys.get_data(param)
+            aux_subsys = _aux_subsystem(aux_channel, dataset, param)
 
             # some productions do not process every parameter for the aux channel
             # (e.g. no cuspEmax in the pulser01ana dsp tier from prod-blind v2.0.0 on)

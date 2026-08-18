@@ -301,6 +301,10 @@ def generate_plots(config: dict, plt_path: str, n_files=None, render: bool = Tru
 
 def make_plots(config: dict, plt_path: str, saving: str, render: bool = True):
 
+    # each chunk gets its own subsystems; do not carry the previous chunk's
+    # cached aux data (or its memory) into this one
+    subsystem.clear_aux_cache()
+
     # -------------------------------------------------------------------------
     # set up log file for each system
     # -------------------------------------------------------------------------

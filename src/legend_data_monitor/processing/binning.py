@@ -162,17 +162,38 @@ def frame_to_binned(
     ts_all = df.index.tz_convert("UTC") if df.index.tz else df.index.tz_localize("UTC")
     unix = ts_all.asi8 / 1e9
     detector_names = list(df.columns)
-    stacked = df.to_numpy(dtype=float)
-    n_evt, n_det = stacked.shape
-    timestamps = np.repeat(unix, n_det)
-    detectors = np.tile(np.asarray(detector_names, dtype=object), n_evt)
-    values = stacked.ravel()
-    return fill_time_series(
-        timestamps,
-        detectors,
-        values,
-        detector_names,
-        t_start if t_start is not None else unix.min(),
-        t_stop if t_stop is not None else unix.max(),
-        cadence,
-    )
+
+    step = schema.CADENCE_SECONDS[cadence]
+    align = max(schema.CADENCE_SECONDS.values())
+    t0 = np.floor((t_start if t_start is not None else unix.min()) / align) * align
+    t1 = np.ceil((t_stop if t_stop is not None else unix.max()) / align) * align
+    if t1 <= t0:
+        t1 = t0 + align
+    n_bins = int(round((t1 - t0) / step))
+
+    time_ax = bh.axis.Regular(n_bins, t0, t1)
+    det_ax = bh.axis.StrCategory(list(detector_names))
+    hist = bh.Histogram(time_ax, det_ax, storage=bh.storage.Mean())
+    mins = np.full((n_bins, len(detector_names)), np.nan)
+    maxs = np.full((n_bins, len(detector_names)), np.nan)
+
+    # fill one detector at a time: the long-format form of this (repeat the
+    # timestamps and tile an object-dtype detector array over every column)
+    # materialises three n_events x n_detectors arrays at once, which is what
+    # drove the build's memory peak on a full run
+    for col, detector in enumerate(detector_names):
+        values = df[detector].to_numpy(dtype=float)
+        finite = np.isfinite(values)
+        if not finite.any():
+            continue
+        ts, vs = unix[finite], values[finite]
+        hist.fill(ts, detector, sample=vs)
+
+        t_idx = np.clip(((ts - t0) // step).astype(int), 0, n_bins - 1)
+        order = np.argsort(t_idx, kind="stable")
+        t_sorted, v_sorted = t_idx[order], vs[order]
+        starts = np.flatnonzero(np.r_[True, np.diff(t_sorted) > 0])
+        mins[t_sorted[starts], col] = np.fmin.reduceat(v_sorted, starts)
+        maxs[t_sorted[starts], col] = np.fmax.reduceat(v_sorted, starts)
+
+    return BinnedTimeSeries(hist, mins, maxs)
