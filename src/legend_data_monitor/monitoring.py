@@ -1721,6 +1721,7 @@ def plot_time_series(
     gain_shift_series = {}
     param_series = {}
     cal_point_rows = []
+    cal_points_seen = set()
     for index_i in range(len(period_list)):
         period = period_list[index_i]
         run_list = dataset[period]
@@ -1873,21 +1874,25 @@ def plot_time_series(
                             "kx",
                             label="FEP gain",
                         )
-                        cal_point_rows += [
-                            {
-                                "detector": channel_name,
-                                "string": string,
-                                "position": pos,
-                                "run_start": start,
-                                "fep_diff": fep,
-                                "cal_const_diff": const,
-                            }
-                            for start, fep, const in zip(
-                                pars_data["run_start"],
-                                pars_data["fep_diff"],
-                                pars_data["cal_const_diff"],
-                            )
-                        ]
+                        # the markers are drawn once per correction type, but
+                        # they are the same calibration points: record them once
+                        if channel_name not in cal_points_seen:
+                            cal_points_seen.add(channel_name)
+                            cal_point_rows += [
+                                {
+                                    "detector": channel_name,
+                                    "string": string,
+                                    "position": pos,
+                                    "run_start": start,
+                                    "fep_diff": fep,
+                                    "cal_const_diff": const,
+                                }
+                                for start, fep, const in zip(
+                                    pars_data["run_start"],
+                                    pars_data["fep_diff"],
+                                    pars_data["cal_const_diff"],
+                                )
+                            ]
                         plt.plot(
                             pars_data["run_start"] - pd.Timedelta(hours=5),
                             pars_data["cal_const_diff"],

@@ -28,7 +28,7 @@ def _dataset(timestamps=("20260731T181831Z",)):
     }
 
 
-def test_aux_subsystem_is_built_once_per_parameter(monkeypatch):
+def test_prewarm_serves_every_parameter_from_one_load(monkeypatch):
     built = []
 
     class FakeSubsystem:
@@ -36,17 +36,20 @@ def test_aux_subsystem_is_built_once_per_parameter(monkeypatch):
             built.append(name)
 
         def get_data(self, param):
-            self.data = param
+            self.data = [param] if isinstance(param, str) else list(param)
 
     monkeypatch.setattr(subsystem, "Subsystem", FakeSubsystem)
+    subsystem.prewarm_aux("pulser01ana", _dataset(), ["baseline", "bl_std"])
     first = subsystem._aux_subsystem("pulser01ana", _dataset(), "baseline")
-    second = subsystem._aux_subsystem("pulser01ana", _dataset(), "baseline")
+    second = subsystem._aux_subsystem("pulser01ana", _dataset(), "bl_std")
 
+    # one load serves both parameters (the old per-parameter key never hit:
+    # every plot asks for a different parameter)
     assert first is second
-    assert built == ["pulser01ana"]  # the second call did not re-read
+    assert built == ["pulser01ana"]
 
 
-def test_different_parameters_are_cached_separately(monkeypatch):
+def test_parameter_outside_the_prewarm_falls_back_to_its_own_load(monkeypatch):
     built = []
 
     class FakeSubsystem:
@@ -54,11 +57,12 @@ def test_different_parameters_are_cached_separately(monkeypatch):
             built.append(name)
 
         def get_data(self, param):
-            self.data = param
+            self.data = [param] if isinstance(param, str) else list(param)
 
     monkeypatch.setattr(subsystem, "Subsystem", FakeSubsystem)
+    subsystem.prewarm_aux("pulser01ana", _dataset(), ["baseline"])
     subsystem._aux_subsystem("pulser01ana", _dataset(), "baseline")
-    subsystem._aux_subsystem("pulser01ana", _dataset(), "bl_std")
+    subsystem._aux_subsystem("pulser01ana", _dataset(), "not_prewarmed")
     assert len(built) == 2
 
 
@@ -71,20 +75,19 @@ def test_a_different_keylist_is_a_different_entry(monkeypatch):
             built.append(name)
 
         def get_data(self, param):
-            self.data = param
+            self.data = [param] if isinstance(param, str) else list(param)
 
     monkeypatch.setattr(subsystem, "Subsystem", FakeSubsystem)
-    subsystem._aux_subsystem("pulser01ana", _dataset(["k1"]), "baseline")
-    subsystem._aux_subsystem("pulser01ana", _dataset(["k2"]), "baseline")
+    subsystem.prewarm_aux("pulser01ana", _dataset(["k1"]), ["baseline"])
+    subsystem.prewarm_aux("pulser01ana", _dataset(["k2"]), ["baseline"])
     assert len(built) == 2
 
 
-def test_cache_key_is_stable_for_equal_datasets():
-    a = subsystem._aux_cache_key("pulser01ana", _dataset(), "baseline")
-    b = subsystem._aux_cache_key("pulser01ana", _dataset(), "baseline")
+def test_cache_key_is_stable_and_parameter_independent():
+    a = subsystem._aux_cache_key("pulser01ana", _dataset())
+    b = subsystem._aux_cache_key("pulser01ana", _dataset())
     assert a == b
-    # list parameters are accepted (hashable key)
-    assert subsystem._aux_cache_key("pulser01ana", _dataset(), ["a", "b"])
+    assert a != subsystem._aux_cache_key("pulser01ana", _dataset(["other"]))
 
 
 def test_clear_aux_cache_forces_a_reload(monkeypatch):
@@ -95,10 +98,49 @@ def test_clear_aux_cache_forces_a_reload(monkeypatch):
             built.append(name)
 
         def get_data(self, param):
-            self.data = param
+            self.data = [param] if isinstance(param, str) else list(param)
 
     monkeypatch.setattr(subsystem, "Subsystem", FakeSubsystem)
-    subsystem._aux_subsystem("pulser01ana", _dataset(), "baseline")
+    subsystem.prewarm_aux("pulser01ana", _dataset(), ["baseline"])
     subsystem.clear_aux_cache()
-    subsystem._aux_subsystem("pulser01ana", _dataset(), "baseline")
+    subsystem.prewarm_aux("pulser01ana", _dataset(), ["baseline"])
     assert len(built) == 2
+
+
+def test_prewarm_skips_parameters_the_aux_merge_never_uses(monkeypatch):
+    """hit-tier, special and quality-cut parameters never reach the aux channel."""
+    built = []
+
+    class FakeSubsystem:
+        def __init__(self, name, dataset=None):
+            built.append(name)
+
+        def get_data(self, param):
+            self.data = [param] if isinstance(param, str) else list(param)
+
+    monkeypatch.setattr(subsystem, "Subsystem", FakeSubsystem)
+    # trapEmax_ctc_cal is hit tier, AoE_Custom is special, quality_cuts is a
+    # pseudo-parameter: none of them should trigger a load
+    subsystem.prewarm_aux(
+        "pulser01ana", _dataset(), ["trapEmax_ctc_cal", "AoE_Custom", "quality_cuts"]
+    )
+    assert built == []
+
+
+def test_prewarm_loads_the_union_in_one_call(monkeypatch):
+    loaded = []
+
+    class FakeSubsystem:
+        def __init__(self, name, dataset=None):
+            pass
+
+        def get_data(self, param):
+            loaded.append(param)
+            self.data = [param] if isinstance(param, str) else list(param)
+
+    monkeypatch.setattr(subsystem, "Subsystem", FakeSubsystem)
+    subsystem.prewarm_aux(
+        "pulser01ana", _dataset(), ["baseline", "bl_std", "baseline"]
+    )
+    # a single call carrying the de-duplicated union, not one call per parameter
+    assert loaded == [["baseline", "bl_std"]]

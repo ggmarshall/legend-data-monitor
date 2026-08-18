@@ -15,14 +15,16 @@ list_of_str = list[str]
 tuple_of_str = tuple[str]
 
 
-#: cache of loaded aux subsystems, keyed by (channel, dataset, parameter).
-#: include_aux is called once per configured plot, and each call used to
-#: re-instantiate and re-read the aux channel: 6 redundant loads per chunk on
-#: the production config, 10 DataLoader setups per chunk where ~5 suffice.
+#: cache of loaded aux subsystems, keyed by (channel, dataset) -- deliberately
+#: NOT by parameter. include_aux is called once per configured plot and each
+#: plot asks for a different parameter, so a per-parameter key never hits (18
+#: pulser01ana loads over 3 chunks, 0 reuses, measured on p22/r012). Loading
+#: the union of the parameters up front makes one pass over the files serve
+#: them all.
 _AUX_CACHE: dict = {}
 
 
-def _aux_cache_key(aux_channel, dataset, param):
+def _aux_cache_key(aux_channel, dataset):
     time_key = dataset.get("timestamps") or dataset.get("runs") or dataset.get("start")
     if isinstance(time_key, list):
         time_key = tuple(time_key)
@@ -32,22 +34,57 @@ def _aux_cache_key(aux_channel, dataset, param):
         dataset.get("version"),
         dataset.get("type"),
         time_key,
-        param if isinstance(param, str) else tuple(param),
     )
 
 
+def prewarm_aux(aux_channel, dataset, params) -> None:
+    """Load the aux channel once with every parameter the config will ask for.
+
+    Called before the per-plot loop; each later include_aux then finds its
+    column already loaded instead of re-reading the tier.
+    """
+    params = [p for p in dict.fromkeys(params) if isinstance(p, str)]
+    # mirror the skips in include_aux: special parameters, the quality-cut
+    # pseudo-parameters and hit-tier parameters never reach the aux merge
+    params = [
+        p
+        for p in params
+        if p not in utils.SPECIAL_PARAMETERS
+        and p
+        not in (
+            "quality_cuts",
+            "geds/quality/is_not_bb_like/is_delayed_discharge",
+            "geds/quality/is_bb_like",
+        )
+        and utils.PARAMETER_TIERS.get(p) != "hit"
+    ]
+    if not params:
+        return
+    key = _aux_cache_key(aux_channel, dataset)
+    if key in _AUX_CACHE:
+        return
+    utils.logger.debug(
+        "...... pre-loading %s with %d parameter(s)", aux_channel, len(params)
+    )
+    aux_subsys = Subsystem(aux_channel, dataset=dataset)
+    aux_subsys.get_data(params)
+    _AUX_CACHE[key] = aux_subsys
+
+
 def _aux_subsystem(aux_channel, dataset, param):
-    """Load the aux channel once per (channel, dataset, parameter)."""
-    key = _aux_cache_key(aux_channel, dataset, param)
+    """Return the aux channel carrying ``param``, loading it only if needed."""
+    key = _aux_cache_key(aux_channel, dataset)
     cached = _AUX_CACHE.get(key)
-    if cached is not None:
+    if cached is not None and param in getattr(cached, "data", ()):
         utils.logger.debug("...... reusing cached %s data", aux_channel)
         return cached
+
     aux_subsys = Subsystem(aux_channel, dataset=dataset)
     # get data for these parameters and time range given in the dataset
     # (if no parameters given to plot, baseline and wfmax will always be loaded to flag pulser events anyway)
     aux_subsys.get_data(param)
-    _AUX_CACHE[key] = aux_subsys
+    if cached is None:
+        _AUX_CACHE[key] = aux_subsys
     return aux_subsys
 
 
