@@ -57,7 +57,9 @@ def test_pivots_are_stored_as_float32(tmp_path):
     stored = pd.read_hdf(path, key="IsPulser_Trapemax")
     assert (stored.dtypes == "float32").all()
     # ... and still the same numbers, to float32
-    assert np.allclose(stored.iloc[0].to_numpy(), [1000.0, 1000 + 1000 / 399], rtol=1e-6)
+    assert np.allclose(
+        stored.iloc[0].to_numpy(), [1000.0, 1000 + 1000 / 399], rtol=1e-6
+    )
 
 
 def test_pivots_are_compressed(tmp_path):

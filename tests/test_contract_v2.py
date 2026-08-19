@@ -87,12 +87,8 @@ def test_merge_is_sum_and_minmax():
         merged.hist.view()["count"],
         b1.hist.view()["count"] + b2.hist.view()["count"],
     )
-    assert np.array_equal(
-        merged.mins, np.fmin(b1.mins, b2.mins), equal_nan=True
-    )
-    assert np.array_equal(
-        merged.maxs, np.fmax(b1.maxs, b2.maxs), equal_nan=True
-    )
+    assert np.array_equal(merged.mins, np.fmin(b1.mins, b2.mins), equal_nan=True)
+    assert np.array_equal(merged.maxs, np.fmax(b1.maxs, b2.maxs), equal_nan=True)
 
 
 # -------------------------------------------------------------------------
@@ -104,7 +100,10 @@ def test_roundtrip_binned_series(tmp_path):
     binned = _binned()
     path = str(tmp_path / "l200-p19-r001-phy-geds.hdf")
     keys = writer.write_binned_series(
-        path, "IsPulser", "TrapemaxCtcCal", binned,
+        path,
+        "IsPulser",
+        "TrapemaxCtcCal",
+        binned,
         attrs={"unit": "keV", "label": "Cal. gain", "limits": [-0.05, 0.05]},
     )
     assert keys == [
@@ -148,8 +147,14 @@ def test_roundtrip_distribution_and_frames(tmp_path):
     assert reader.read_frame(path, "IsPulser_Baseline_mean").iloc[0, 1] == 2.0
 
     detectors = {
-        "V02160A": {"daq_rawid": 1104000, "string": 2, "position": 3,
-                    "processable": True, "usability": "on", "mass_in_kg": 1.0}
+        "V02160A": {
+            "daq_rawid": 1104000,
+            "string": 2,
+            "position": 3,
+            "processable": True,
+            "usability": "on",
+            "mass_in_kg": 1.0,
+        }
     }
     writer.write_detector_map(path, detectors)
     dmap = reader.read_frame(path, "detector_map")
@@ -216,6 +221,7 @@ def test_apply_remove_keys_noop_without_entries():
     out = writer.apply_remove_keys(df, "p99", "r999")
     pd.testing.assert_frame_equal(out, df)
 
+
 def test_contract_file_carries_no_slack(tmp_path):
     """uhi writes float64; narrowing it *in the file* would orphan the blocks.
 
@@ -233,9 +239,11 @@ def test_contract_file_carries_no_slack(tmp_path):
     with h5py.File(path, "r") as f:
         stored = []
         f.visititems(
-            lambda n, o: stored.append(o.id.get_storage_size())
-            if isinstance(o, h5py.Dataset)
-            else None
+            lambda n, o: (
+                stored.append(o.id.get_storage_size())
+                if isinstance(o, h5py.Dataset)
+                else None
+            )
         )
         assert f["hist/IsPulser_Trapemax/1min/storage/values"].dtype == np.float32
     # an orphaned float64 copy of the storage measures 1.37x here

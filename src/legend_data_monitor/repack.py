@@ -98,9 +98,7 @@ def repack_run(
     experiment: str = "l200",
 ) -> dict:
     """Repack every HDF output of one run; return ``{path: (before, after)}``."""
-    run_dir = os.path.join(
-        generated_path, "generated/plt/hit", data_type, period, run
-    )
+    run_dir = os.path.join(generated_path, "generated/plt/hit", data_type, period, run)
     pattern = os.path.join(run_dir, f"{experiment}-{period}-{run}-{data_type}-*.hdf")
     results = {}
     for path in sorted(glob.glob(pattern)):
@@ -126,10 +124,110 @@ def repack_run(
     return results
 
 
+def strip_classifier_pivots(
+    generated_path: str,
+    period: str,
+    run: str,
+    data_type: str = "phy",
+    experiment: str = "l200",
+) -> tuple:
+    """
+    Drop the QC classifier pivots from a run's v1 file.
+
+    They are event-level continuous values that barely compress (1.6 GB of a
+    2.2 GB run file) and exist in the v1 file only as the transport to the
+    contract build, which bins them into ``hist/<key>/<cadence>``. Refuses to
+    touch the file unless the contract carries every key about to be removed,
+    so a v1 file is never stripped of the only copy of its data. QC flag
+    (boolean) keys, ``_mean``/``_var``/``_info`` keys and parameters survive.
+
+    params
+    ------
+    generated_path : str
+        Output root of a previous run (the folder containing ``generated``).
+    period, run : str
+        Run whose v1 file to strip.
+    data_type : str
+        Data type (``phy``, ...).
+    experiment : str
+        Experiment prefix in file names.
+
+    returns
+    -------
+    sizes: tuple
+        ``(before, after)`` file size in bytes; equal when nothing was done.
+    """
+    run_dir = os.path.join(generated_path, "generated/plt/hit", data_type, period, run)
+    stem = f"{experiment}-{period}-{run}-{data_type}-geds"
+    v1_file = os.path.join(run_dir, f"{stem}.hdf")
+    contract_file = os.path.join(run_dir, f"{stem}-schema2.hdf")
+    if not os.path.exists(v1_file):
+        utils.logger.warning("no v1 file at %s; nothing to strip", v1_file)
+        return 0, 0
+
+    before = os.path.getsize(v1_file)
+    with pd.HDFStore(v1_file, "r") as store:
+        keys = [key.lstrip("/") for key in store.keys()]
+    doomed = [key for key in keys if "Classifier" in key]
+    if not doomed:
+        utils.logger.info("%s carries no classifier pivots", os.path.basename(v1_file))
+        return before, before
+
+    # the guard: every key being removed must already be binned in the contract
+    if not os.path.exists(contract_file):
+        utils.logger.error(
+            "refusing to strip %s: no contract file at %s",
+            os.path.basename(v1_file),
+            contract_file,
+        )
+        return before, before
+    with h5py.File(contract_file, "r") as f:
+        missing = [key for key in doomed if f"hist/{key}/1min" not in f]
+    if missing:
+        utils.logger.error(
+            "refusing to strip %s: %d classifier key(s) not in the contract (e.g. %s)",
+            os.path.basename(v1_file),
+            len(missing),
+            missing[0],
+        )
+        return before, before
+
+    tmp = v1_file + ".repack"
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    try:
+        for key in keys:
+            if key in doomed:
+                continue
+            frame = pd.read_hdf(v1_file, key=key)
+            options = {} if key.endswith(_METADATA_SUFFIX) else utils.HDF_COMPRESSION
+            frame.to_hdf(tmp, key=key, mode="a", **options)
+        after = os.path.getsize(tmp)
+        os.replace(tmp, v1_file)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    utils.logger.info(
+        "stripped %d classifier pivot(s) from %s: %.2f -> %.2f GB",
+        len(doomed),
+        os.path.basename(v1_file),
+        before / 2**30,
+        after / 2**30,
+    )
+    return before, after
+
+
 # Only the contract's own histogram arrays. Everything else in the file is a
 # pandas frame, whose datasets carry pytables attributes (CLASS, transposed,
 # ...) that recreating them would drop -- and pandas then refuses to read them.
-_NARROWABLE = ("/storage/counts", "/storage/values", "/storage/variances", "/min", "/max")
+_NARROWABLE = (
+    "/storage/counts",
+    "/storage/values",
+    "/storage/variances",
+    "/min",
+    "/max",
+)
 
 
 def _narrow_contract_datasets(path: str) -> None:
@@ -137,12 +235,14 @@ def _narrow_contract_datasets(path: str) -> None:
     with h5py.File(path, "r+") as f:
         wide = []
         f.visititems(
-            lambda name, obj: wide.append(name)
-            if isinstance(obj, h5py.Dataset)
-            and obj.dtype == np.float64
-            and name.startswith("hist/")
-            and name.endswith(_NARROWABLE)
-            else None
+            lambda name, obj: (
+                wide.append(name)
+                if isinstance(obj, h5py.Dataset)
+                and obj.dtype == np.float64
+                and name.startswith("hist/")
+                and name.endswith(_NARROWABLE)
+                else None
+            )
         )
         for name in wide:
             dataset = f[name]
@@ -189,12 +289,14 @@ def _contract_hdf_is_current(path: str) -> bool:
     with h5py.File(path, "r") as f:
         wide = []
         f.visititems(
-            lambda name, obj: wide.append(name)
-            if isinstance(obj, h5py.Dataset)
-            and obj.dtype == np.float64
-            and name.startswith("hist/")
-            and name.endswith(_NARROWABLE)
-            else None
+            lambda name, obj: (
+                wide.append(name)
+                if isinstance(obj, h5py.Dataset)
+                and obj.dtype == np.float64
+                and name.startswith("hist/")
+                and name.endswith(_NARROWABLE)
+                else None
+            )
         )
     return not wide
 

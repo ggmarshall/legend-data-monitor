@@ -7,7 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import yaml
 
-from . import calibration, core, errors, logs, monitoring, tasks, utils
+from . import calibration, core, errors, logs, monitoring, repack, tasks, utils
 from .contract import build as contract_build
 from .contract import reader as contract_reader
 from .plots import timeseries as contract_plots
@@ -240,9 +240,7 @@ def auto_run(
                 plt.close("all")
         else:
             utils.logger.debug(f"... file has {num_lines} lines. No need to split.")
-            core.auto_control_plots(
-                my_config, keys_file, "", {}, render=render_plots
-            )
+            core.auto_control_plots(my_config, keys_file, "", {}, render=render_plots)
 
     def task_build_monitoring_hdf(logger=None):
         files_folder = os.path.join(output_folder, ref_version)
@@ -254,6 +252,9 @@ def auto_run(
             metadata_path=os.path.join(auto_dir_path, "inputs"),
             data_type=data_type,
         )
+        # last: the classifier pivots were only the transport to the two
+        # builds above; the strip verifies the contract holds them first
+        repack.strip_classifier_pivots(files_folder, period, run, data_type=data_type)
 
     def task_render_plots(logger=None):
         """Draw the run's figures from the contract file.
@@ -331,9 +332,7 @@ def auto_run(
             tasks.Task("build_monitoring_hdf", task_build_monitoring_hdf, period, run)
         )
         if render_plots:
-            task_list.append(
-                tasks.Task("render_plots", task_render_plots, period, run)
-            )
+            task_list.append(tasks.Task("render_plots", task_render_plots, period, run))
         if cluster == "lngs" and get_sc is True:
             task_list.append(tasks.Task("slow_control", task_slow_control, period, run))
         task_list.append(
@@ -400,12 +399,8 @@ def render_run_plots(
     # SAVED_PLOT lines are a consumer contract, so always announce on some
     # logger; the per-task one when running in the pipeline, else the package's
     logger = logger if logger is not None else utils.logger
-    run_dir = os.path.join(
-        files_folder, "generated/plt/hit", data_type, period, run
-    )
-    v2_file = os.path.join(
-        run_dir, f"l200-{period}-{run}-{data_type}-geds-schema2.hdf"
-    )
+    run_dir = os.path.join(files_folder, "generated/plt/hit", data_type, period, run)
+    v2_file = os.path.join(run_dir, f"l200-{period}-{run}-{data_type}-geds-schema2.hdf")
     if not os.path.isfile(v2_file):
         utils.logger.warning("no contract-v2 file to render PNGs from: %s", v2_file)
         return []

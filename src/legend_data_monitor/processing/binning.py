@@ -40,8 +40,12 @@ class BinnedTimeSeries:
         """Lossless rebin of the time axis by an integer factor."""
         hist = self.hist[:: bh.rebin(factor), :]
         n_new = self.mins.shape[0] // factor
-        mins = np.fmin.reduceat(self.mins[: n_new * factor], np.arange(0, n_new * factor, factor), axis=0)
-        maxs = np.fmax.reduceat(self.maxs[: n_new * factor], np.arange(0, n_new * factor, factor), axis=0)
+        mins = np.fmin.reduceat(
+            self.mins[: n_new * factor], np.arange(0, n_new * factor, factor), axis=0
+        )
+        maxs = np.fmax.reduceat(
+            self.maxs[: n_new * factor], np.arange(0, n_new * factor, factor), axis=0
+        )
         return BinnedTimeSeries(hist, mins, maxs)
 
     def to_frame(self, stat: str = "mean") -> pd.DataFrame:
@@ -57,7 +61,11 @@ class BinnedTimeSeries:
         elif stat == "count":
             values = view["count"]
         elif stat == "variance":
-            values = np.where(view["count"] > 1, view["_sum_of_deltas_squared"] / np.maximum(view["count"] - 1, 1), np.nan)
+            values = np.where(
+                view["count"] > 1,
+                view["_sum_of_deltas_squared"] / np.maximum(view["count"] - 1, 1),
+                np.nan,
+            )
         elif stat == "min":
             values = self.mins
         elif stat == "max":

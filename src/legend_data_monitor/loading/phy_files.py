@@ -84,7 +84,9 @@ def load_channel_frame(
                 per_file.append(frame)
         if not per_file:
             continue
-        frame = pd.concat(per_file, ignore_index=True) if len(per_file) > 1 else per_file[0]
+        frame = (
+            pd.concat(per_file, ignore_index=True) if len(per_file) > 1 else per_file[0]
+        )
         # rawids are 7-digit: int32 halves what is otherwise one of the widest
         # columns in the frame, one entry per event
         frame["channel"] = np.int32(int(channel[2:]))
@@ -147,9 +149,7 @@ def resolve_files(
     import glob
     import os
 
-    base = os.path.join(
-        path, version, "generated/tier", tier, datatype, period
-    )
+    base = os.path.join(path, version, "generated/tier", tier, datatype, period)
     exp = experiment.lower()
 
     if not timerange:

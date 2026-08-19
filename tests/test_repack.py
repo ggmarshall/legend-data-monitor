@@ -66,9 +66,7 @@ def test_repack_leaves_the_original_when_it_fails(tmp_path, monkeypatch):
 
 def test_repack_run_covers_both_file_kinds(tmp_path):
     path, _ = _legacy_run(tmp_path)
-    contract, _ = _legacy_contract(
-        tmp_path / "generated/plt/hit/phy/p22/r000"
-    )
+    contract, _ = _legacy_contract(tmp_path / "generated/plt/hit/phy/p22/r000")
     results = repack.repack_run(str(tmp_path), "p22", "r000")
     assert sorted(results) == sorted([path, contract])
     for before, after in results.values():
@@ -103,7 +101,9 @@ def _legacy_contract(tmp_path):
         group.attrs["schema"] = schema.SCHEMA_VERSION
         group.create_dataset("min", data=binned.mins, compression="gzip")
         group.create_dataset("max", data=binned.maxs, compression="gzip")
-    writer.write_frame(path, "detector_map", pd.DataFrame({"name": dets, "mass": [1.0, 2.0, 3.0]}))
+    writer.write_frame(
+        path, "detector_map", pd.DataFrame({"name": dets, "mass": [1.0, 2.0, 3.0]})
+    )
     return path, binned
 
 
@@ -129,7 +129,10 @@ def test_repack_contract_narrows_storage_and_keeps_everything_readable(tmp_path)
 
     back = reader.read_binned_series(path, "IsPulser", "Trapemax", "1min")
     assert np.allclose(
-        back.hist.view()["value"], binned.hist.view()["value"], rtol=1e-6, equal_nan=True
+        back.hist.view()["value"],
+        binned.hist.view()["value"],
+        rtol=1e-6,
+        equal_nan=True,
     )
     # the pandas frames alongside must survive the copy untouched
     frame = pd.read_hdf(path, key="detector_map")
@@ -140,4 +143,115 @@ def test_repack_contract_is_idempotent(tmp_path):
     path, _ = _legacy_contract(tmp_path)
     _, once = repack.repack_contract_hdf(path)
     before, after = repack.repack_contract_hdf(path)
+    assert before == after == once
+
+
+# -------------------------------------------------------------------------
+# stripping classifier pivots (they live on, binned, in the contract)
+# -------------------------------------------------------------------------
+
+CLASSIFIER_KEYS = [
+    "All_IsValidTailRmsClassifier",
+    "IsPulser_IsValidBlPolyRmsClassifier",
+]
+SURVIVOR_KEYS = ["IsPulser_AoeCustom", "IsPulser_IsSaturated", "IsPulser_Trapemax"]
+
+
+def _run_with_classifiers(tmp_path, with_contract=True, complete_contract=True):
+    """A current-layout v1 file with classifier pivots, plus its contract."""
+    from legend_data_monitor.contract import writer
+    from legend_data_monitor.processing import binning
+
+    run_dir = tmp_path / "generated/plt/hit/phy/p22/r000"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    v1 = str(run_dir / "l200-p22-r000-phy-geds.hdf")
+
+    rng = np.random.default_rng(5)
+    frames = {}
+    for key in SURVIVOR_KEYS + CLASSIFIER_KEYS:
+        frames[key] = pd.DataFrame(
+            rng.normal(0, 1, (2000, 5)).astype("float32"),
+            index=pd.date_range("2026-01-01", periods=2000, freq="s"),
+        )
+        frames[key].to_hdf(v1, key=key, mode="a", **utils.HDF_COMPRESSION)
+    pd.DataFrame.from_dict({"unit": "ADC"}, orient="index", columns=["Value"]).to_hdf(
+        v1, key="IsPulser_Trapemax_info", mode="a"
+    )
+
+    if with_contract:
+        contract = str(run_dir / "l200-p22-r000-phy-geds-schema2.hdf")
+        dets = ["V02160A", "V02160B"]
+        t0 = 1_700_000_000.0
+        binned = binning.fill_time_series(
+            rng.uniform(t0, t0 + 3600, 500),
+            rng.choice(dets, 500),
+            rng.normal(0, 1, 500),
+            dets,
+            t0,
+            t0 + 3600,
+        )
+        binnable = CLASSIFIER_KEYS if complete_contract else CLASSIFIER_KEYS[:1]
+        for key in binnable:
+            flag, param = key.split("_", 1)
+            writer.write_binned_series(contract, flag, param, binned)
+    return v1, frames
+
+
+def _livetime_key(v1):
+    """The key utils.get_livetime would pick (same selection expression)."""
+    import h5py
+
+    with h5py.File(v1, "r") as f:
+        keys = sorted(f.keys())
+    return [
+        k for k in keys if "IsPulser" in k and "info" not in k and "_pulser" not in k
+    ][0]
+
+
+def test_strip_removes_classifiers_and_nothing_else(tmp_path):
+    v1, frames = _run_with_classifiers(tmp_path)
+    livetime_key_before = _livetime_key(v1)
+    before, after = repack.strip_classifier_pivots(str(tmp_path), "p22", "r000")
+
+    assert after < before
+    assert os.path.getsize(v1) == after
+    assert not os.path.exists(v1 + ".repack")
+
+    with pd.HDFStore(v1, "r") as store:
+        keys = sorted(key.lstrip("/") for key in store.keys())
+    assert keys == sorted(SURVIVOR_KEYS + ["IsPulser_Trapemax_info"])
+    for key in SURVIVOR_KEYS:
+        assert pd.read_hdf(v1, key=key).equals(frames[key])
+    assert pd.read_hdf(v1, key="IsPulser_Trapemax_info").loc["unit", "Value"] == "ADC"
+    # the strip must not change which key the livetime lookup lands on
+    assert _livetime_key(v1) == livetime_key_before == "IsPulser_AoeCustom"
+
+
+def test_strip_refuses_without_contract(tmp_path):
+    v1, _ = _run_with_classifiers(tmp_path, with_contract=False)
+    before = os.path.getsize(v1)
+    got = repack.strip_classifier_pivots(str(tmp_path), "p22", "r000")
+    assert got == (before, before)
+    assert os.path.getsize(v1) == before
+    assert not os.path.exists(v1 + ".repack")
+    with pd.HDFStore(v1, "r") as store:
+        assert len(store.keys()) == len(SURVIVOR_KEYS + CLASSIFIER_KEYS) + 1
+
+
+def test_strip_refuses_on_incomplete_contract(tmp_path):
+    """One classifier missing from the contract poisons the whole strip."""
+    v1, _ = _run_with_classifiers(tmp_path, complete_contract=False)
+    before = os.path.getsize(v1)
+    got = repack.strip_classifier_pivots(str(tmp_path), "p22", "r000")
+    assert got == (before, before)
+    with pd.HDFStore(v1, "r") as store:
+        keys = [key.lstrip("/") for key in store.keys()]
+    for key in CLASSIFIER_KEYS:
+        assert key in keys
+
+
+def test_strip_is_idempotent(tmp_path):
+    _run_with_classifiers(tmp_path)
+    _, once = repack.strip_classifier_pivots(str(tmp_path), "p22", "r000")
+    before, after = repack.strip_classifier_pivots(str(tmp_path), "p22", "r000")
     assert before == after == once

@@ -3,9 +3,9 @@ import os
 import pickle
 import shelve
 
+import awkward as ak
 import lh5
 import matplotlib.pyplot as plt
-import awkward as ak
 import numpy as np
 import pandas as pd
 import yaml
@@ -750,7 +750,7 @@ def check_psd(
     utils.logger.debug("...inspecting PSD stability in cal runs")
     with monitoring.open_shelf(
         os.path.join(output_dir, period, f"l200-{period}-cal-monitoring")
-        ) as shelf:
+    ) as shelf:
         for idx, det_name in enumerate(detectors_name):
             evaluate_psd_usability_and_plot(
                 period,
@@ -1427,9 +1427,7 @@ def check_calibration_lac_ssc(
                 output, ged, data_type, "FEP_gain_stab", stable
             )
 
-    write_fep_gain_contract(
-        output_folder, period, run, fep_stats, data_type=data_type
-    )
+    write_fep_gain_contract(output_folder, period, run, fep_stats, data_type=data_type)
 
     # plot
     monitoring.box_summary_plot(

@@ -144,6 +144,39 @@ against ~3 h to regenerate, and it covers both file kinds (v1 pivots 7.1x,
 contract 1.8x). It is idempotent, atomic per file, and never replaces a file
 it did not manage to shrink.
 
+## Classifier pivots stripped from the v1 file (2026-08-20)
+
+Of the repacked 2.2 GB v1 file, **1.61 GB (73%) was the 28 QC classifier
+pivots** -- 7 classifiers x 4 event types of event-level continuous float32
+that barely compresses. They exist in the v1 file only as the *transport* to
+the contract build, which bins them into `hist/<key>/<cadence>`; res_10min /
+res_60min keep their own resampled copies. Decision (2026-08-19): classifiers
+live only in the contract, so `repack.strip_classifier_pivots` removes the
+pivots after the contract build.
+
+- **Guarded**: refuses to touch the file unless the contract carries
+  `hist/<key>/1min` for every key about to be removed -- a v1 file is never
+  stripped of the only copy of its data. QC *flag* (boolean) keys,
+  `_mean`/`_var`/`_info` keys and parameters all survive.
+- Wired as the last step of `task_build_monitoring_hdf` (after
+  `build_new_files`, whose res files resample every v1 key, and after the
+  contract build). Existing runs: `repack --strip-classifiers`.
+- Verified on p22/r006: 200 -> 172 keys, all 172 survivors
+  checksum-identical, livetime key selection unchanged
+  (`IsPulser_AoeCustom` sorts before the classifier keys either way, pinned
+  by test), contract classifier hists and the 28 res_10min copies intact,
+  second pass a no-op. **v1: 2.20 -> 0.63 GB; a run's full artifact set is
+  now ~1.2 GB against the original 17 GB (14x).**
+- This intentionally breaks 200-key parity with old production:
+  v1-only consumers lose event-level classifiers (binned versions remain in
+  the contract and res files). New runs still pay the transient ~1.6 GB of
+  pivots during the run -- they are the transport -- and drop them at the end.
+
+Declined for now (2026-08-19): dropping the contract's 1min min/max sidecars
+(226 MB, 40% of the file -- envelopes kept at all cadences) and the per-entry
+loading refactor that would take peak RSS from ~5.4 to ~3 GB (accepted 5.4 GB:
+r008-r012 measured 5.2-5.6 GB at production chunk size vs 14-17 before).
+
 ## Remaining
 
 1. **Pickled-figure shelve writers** in `monitoring.py` (qc_distributions,

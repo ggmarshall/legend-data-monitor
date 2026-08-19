@@ -18,7 +18,9 @@ def _series(n_bins=4, per_bin=10, drift_per_bin=0.0, bin_size=600):
     timestamps, values = [], []
     for b in range(n_bins):
         # place entries inside bin b, away from the edges
-        timestamps += list(np.linspace(b * bin_size + 1, (b + 1) * bin_size - 1, per_bin))
+        timestamps += list(
+            np.linspace(b * bin_size + 1, (b + 1) * bin_size - 1, per_bin)
+        )
         values += [2614.5 + b * drift_per_bin] * per_bin
     return np.array(timestamps, dtype=float), np.array(values, dtype=float)
 

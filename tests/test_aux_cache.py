@@ -140,9 +140,7 @@ def test_prewarm_loads_the_union_in_one_call(monkeypatch):
             self.data = [param] if isinstance(param, str) else list(param)
 
     monkeypatch.setattr(subsystem, "Subsystem", FakeSubsystem)
-    subsystem.prewarm_aux(
-        "pulser01ana", _dataset(), ["baseline", "bl_std", "baseline"]
-    )
+    subsystem.prewarm_aux("pulser01ana", _dataset(), ["baseline", "bl_std", "baseline"])
     # a single call carrying the de-duplicated union, not one call per parameter
     assert loaded == [["baseline", "bl_std"]]
 
@@ -164,7 +162,7 @@ def test_channel_map_columns_are_compacted():
     df = pd.DataFrame(
         {
             "baseline": np.linspace(0, 1, n),
-            "name": ["V01234A"] * n,          # few distinct values, many rows
+            "name": ["V01234A"] * n,  # few distinct values, many rows
             "location": [str(i % 3 + 1) for i in range(n)],  # ints stored as objects
             "det_type": ["bege"] * n,
         }

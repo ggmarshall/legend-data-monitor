@@ -19,9 +19,7 @@ DETS = ["V02160A", "V02160B", "P00574A"]
 def _frame(n=500, seed=3, with_gaps=True):
     rng = np.random.default_rng(seed)
     t0 = 1_700_000_000.0
-    idx = pd.to_datetime(
-        np.sort(rng.uniform(t0, t0 + 3600, n)), unit="s", utc=True
-    )
+    idx = pd.to_datetime(np.sort(rng.uniform(t0, t0 + 3600, n)), unit="s", utc=True)
     data = rng.normal(100, 5, (n, len(DETS)))
     if with_gaps:
         # detectors are not all live for the whole window
@@ -57,10 +55,16 @@ def test_matches_the_long_format_fill():
     gv, wv = got.hist.view(), want.hist.view()
     assert np.array_equal(gv["count"], wv["count"])
     np.testing.assert_allclose(gv["value"], wv["value"], rtol=0, atol=0)
-    np.testing.assert_allclose(gv["_sum_of_deltas_squared"], wv["_sum_of_deltas_squared"])
+    np.testing.assert_allclose(
+        gv["_sum_of_deltas_squared"], wv["_sum_of_deltas_squared"]
+    )
     np.testing.assert_array_equal(np.isnan(got.mins), np.isnan(want.mins))
-    np.testing.assert_allclose(got.mins[~np.isnan(got.mins)], want.mins[~np.isnan(want.mins)])
-    np.testing.assert_allclose(got.maxs[~np.isnan(got.maxs)], want.maxs[~np.isnan(want.maxs)])
+    np.testing.assert_allclose(
+        got.mins[~np.isnan(got.mins)], want.mins[~np.isnan(want.mins)]
+    )
+    np.testing.assert_allclose(
+        got.maxs[~np.isnan(got.maxs)], want.maxs[~np.isnan(want.maxs)]
+    )
 
 
 def test_matches_at_every_contract_cadence():
@@ -68,7 +72,9 @@ def test_matches_at_every_contract_cadence():
     for cadence in schema.CADENCES:
         got = binning.frame_to_binned(df, cadence=cadence)
         want = _long_format_reference(df, cadence=cadence)
-        assert np.array_equal(got.hist.view()["count"], want.hist.view()["count"]), cadence
+        assert np.array_equal(
+            got.hist.view()["count"], want.hist.view()["count"]
+        ), cadence
 
 
 def test_detector_with_no_finite_values_is_kept_as_an_empty_column():

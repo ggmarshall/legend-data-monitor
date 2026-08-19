@@ -155,7 +155,9 @@ class AnalysisData:
             self.parameters if isinstance(self.parameters, list) else [self.parameters]
         )
         wants_qc = bool(QC_PARAMETERS.intersection(requested))
-        cut_columns = set(self.cuts if isinstance(self.cuts, list) else [self.cuts or ""])
+        cut_columns = set(
+            self.cuts if isinstance(self.cuts, list) else [self.cuts or ""]
+        )
 
         for col in sub_data.columns:
             # pulser flag is present only if subsystem.flag_pulser_events() was called -> needed to subselect phy/pulser events
@@ -275,9 +277,7 @@ class AnalysisData:
             utils.logger.info("... selecting K lines in physical (non-pulser) events")
             energy = utils.SPECIAL_PARAMETERS["K_events"][0]
             return (
-                (~data["flag_pulser"])
-                & (data[energy] > 1430)
-                & (data[energy] < 1575)
+                (~data["flag_pulser"]) & (data[energy] > 1430) & (data[energy] < 1575)
             )
         if self.evt_type == "all":
             utils.logger.info("... keeping all (pulser + non-pulser) events")

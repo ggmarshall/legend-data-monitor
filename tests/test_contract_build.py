@@ -14,9 +14,7 @@ def _make_v1_file(tmp_path, period="p19", run="r001"):
     rng = np.random.default_rng(0)
     idx = pd.date_range("2026-07-01", periods=240, freq="20s", tz="UTC")
     rawids = [1104000, 1104001]
-    abs_df = pd.DataFrame(
-        rng.normal(6000, 20, (240, 2)), index=idx, columns=rawids
-    )
+    abs_df = pd.DataFrame(rng.normal(6000, 20, (240, 2)), index=idx, columns=rawids)
     abs_df.index.name = "datetime"
     abs_df.to_hdf(path, key="IsPulser_Trapemax", mode="a")
     var_df = (abs_df / abs_df.mean() - 1) * 100

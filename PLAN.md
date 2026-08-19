@@ -59,6 +59,23 @@ Two known-unverified areas that real data will exercise for the first time: the 
 
 **STATUS: performance + Phase-5c pass verified** (2026-08-18): p22/r012 rerun clean against the golden snapshot — exit 0, **3 h 11 m (was 5 h 00 m)**, peak RSS **17.3 GB (was 24 GB)**, 196/200 v1 keys byte-identical and all contract keys/manifest identical. The 4 differing keys are a **pre-existing data-corruption bug now fixed**: the DataLoader path wrote uninitialised memory (denormals ~1.5e-319) for 6 detectors that lack `is_valid_bl_poly_rms_classifier`; the direct loader yields NaN. Worth raising with the collaboration — that garbage also reached the old dashboard. See REFACTOR_STATUS.md for detail.
 
+**STATUS: classifier pivots stripped (2026-08-20)**: the 28 QC classifier
+pivots (1.61 GB of the 2.2 GB v1 file) are removed once the contract holds
+their binned versions — guarded, idempotent, wired into
+`task_build_monitoring_hdf` and available for old runs via
+`repack --strip-classifiers`. A run's artifact set is now ~1.2 GB (was 17 GB).
+p22 r000–r012 stripped and verified; r013 pending its backfill finish.
+
+**STATUS: classifier pivots stripped (2026-08-20)**: the v1 file's 28 QC
+classifier pivots (1.61 GB of 2.2 GB) are removed after the contract build —
+they existed only as its transport; binned copies live in the contract and
+res files. Guarded (`repack.strip_classifier_pivots` refuses unless the
+contract holds every key), wired into `task_build_monitoring_hdf`, applied to
+p22 r000–r012 (r013 after it lands). **v1 2.2 -> ~0.6 GB; a run's artifact set
+is ~1.2 GB against the original 17 GB (14x).** Declined for now: dropping the
+contract's 1min min/max sidecars; per-entry loading (peak stays ~5.4 GB —
+r008–r012 measured 5.2–5.6 GB vs 14–17 before).
+
 **STATUS: output size + memory pass (2026-08-19)**: v1 file **15.7 -> ~2.2 GB
 per run**, contract file **1.06 -> ~0.58 GB** and ~3x faster to inflate, peak
 RSS **2.3x lower** — verified value-for-value against the previous output

@@ -131,9 +131,7 @@ class Issue:
 
     @property
     def issue_id(self) -> str:
-        return (
-            f"{self.period}-{self.run}-{self.datatype}-{self.detector}-{self.metric}"
-        )
+        return f"{self.period}-{self.run}-{self.datatype}-{self.detector}-{self.metric}"
 
     def to_dict(self) -> dict:
         out = {"issue_id": self.issue_id, "schema": self.RECORD_SCHEMA}

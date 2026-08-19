@@ -19,7 +19,6 @@ from ..config import settings
 from . import schema
 
 
-
 def reference_targets(root) -> dict:
     """Map each object-reference dataset under ``root`` to the names it points at.
 
@@ -33,7 +32,10 @@ def reference_targets(root) -> dict:
     file = root.file
 
     def note(path, obj):
-        if isinstance(obj, h5py.Dataset) and h5py.check_dtype(ref=obj.dtype) is h5py.Reference:
+        if (
+            isinstance(obj, h5py.Dataset)
+            and h5py.check_dtype(ref=obj.dtype) is h5py.Reference
+        ):
             targets[path] = [file[ref].name for ref in np.ravel(obj[...])]
 
     root.visititems(note)
@@ -69,7 +71,9 @@ def write_hist(
         # across. Letting uhi write float64 straight into the file and then
         # narrowing in place works, but HDF5 does not reclaim the blocks it
         # orphans: measured 1.4x slack over a run's worth of keys.
-        with h5py.File("uhi-staging", driver="core", backing_store=False, mode="w") as staging:
+        with h5py.File(
+            "uhi-staging", driver="core", backing_store=False, mode="w"
+        ) as staging:
             # stage under the very path it will occupy, so the object
             # references inside resolve by the same absolute name after the copy
             group = staging.create_group(key)
@@ -85,7 +89,9 @@ def write_hist(
                 )
             for name, value in (attrs or {}).items():
                 if value is not None:
-                    group.attrs[name] = json.dumps(value) if isinstance(value, (list, dict)) else value
+                    group.attrs[name] = (
+                        json.dumps(value) if isinstance(value, (list, dict)) else value
+                    )
             group.attrs["schema"] = schema.SCHEMA_VERSION
             # Spell out the two conventions a plain-h5py reader cannot guess
             # and gets silently wrong: Mean storage keeps means (NOT sums, so
@@ -215,7 +221,9 @@ def apply_remove_keys(df: pd.DataFrame, period: str, run: str) -> pd.DataFrame:
         if det not in out.columns:
             continue
         for entry in entries if isinstance(entries, list) else [entries]:
-            lo = pd.Timestamp(entry.get("from"), tz="UTC") if entry.get("from") else None
+            lo = (
+                pd.Timestamp(entry.get("from"), tz="UTC") if entry.get("from") else None
+            )
             hi = pd.Timestamp(entry.get("to"), tz="UTC") if entry.get("to") else None
             mask = pd.Series(True, index=out.index)
             if lo is not None:

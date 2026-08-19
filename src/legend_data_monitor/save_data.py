@@ -538,7 +538,9 @@ def get_pivot(
                 ) * 100
 
                 # Write the combined DataFrame to the HDF5 file
-                new_var_data.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
+                new_var_data.to_hdf(
+                    file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION
+                )
 
             # otherwise, just read the existing HDF5 file
             else:
@@ -550,7 +552,9 @@ def get_pivot(
                 # the write would keep three copies of the key alive at once
                 del existing_data
                 # Write the combined DataFrame to the HDF5 file
-                combined_data.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
+                combined_data.to_hdf(
+                    file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION
+                )
 
     # overwrite already existing data
     else:
