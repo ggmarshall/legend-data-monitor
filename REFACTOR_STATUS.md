@@ -91,7 +91,7 @@ Measured on one 10-file chunk (production settings, `--plots off`):
 
 Per run at production chunk size the v1 file goes from **15.7 GB to ~2.2 GB**
 (the extra factor over the chunk measurement is slack, below) and the contract
-file from **1.06 GB to 0.79 GB**, which also makes it ~3x faster to inflate --
+file from **1.06 GB to ~0.58 GB**, which also makes it ~3x faster to inflate --
 the number the dashboard feels.
 
 Size, in order of size:
@@ -109,7 +109,10 @@ Size, in order of size:
    at float64.
 4. **Contract storage narrowed** to float32 values/variances and int32 counts
    (`contract.writer._narrow_storage`). boost-histogram views are float64
-   throughout; counts are integers.
+   throughout; counts are integers. The group is assembled in an in-memory
+   HDF5 file and copied across (`expand_refs` remaps `axes`' object
+   references), because narrowing what uhi already wrote into the output
+   leaves the float64 blocks orphaned there — 1.37x slack, measured.
 
 Memory:
 

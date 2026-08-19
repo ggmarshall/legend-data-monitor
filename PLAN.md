@@ -60,7 +60,7 @@ Two known-unverified areas that real data will exercise for the first time: the 
 **STATUS: performance + Phase-5c pass verified** (2026-08-18): p22/r012 rerun clean against the golden snapshot — exit 0, **3 h 11 m (was 5 h 00 m)**, peak RSS **17.3 GB (was 24 GB)**, 196/200 v1 keys byte-identical and all contract keys/manifest identical. The 4 differing keys are a **pre-existing data-corruption bug now fixed**: the DataLoader path wrote uninitialised memory (denormals ~1.5e-319) for 6 detectors that lack `is_valid_bl_poly_rms_classifier`; the direct loader yields NaN. Worth raising with the collaboration — that garbage also reached the old dashboard. See REFACTOR_STATUS.md for detail.
 
 **STATUS: output size + memory pass (2026-08-19)**: v1 file **15.7 -> ~2.2 GB
-per run**, contract file **1.06 -> 0.79 GB** and ~3x faster to inflate, peak
+per run**, contract file **1.06 -> ~0.58 GB** and ~3x faster to inflate, peak
 RSS **2.3x lower** — verified value-for-value against the previous output
 (200/200 v1 keys and all 4006 contract datasets agree to float32 epsilon).
 Root causes and fixes in REFACTOR_STATUS.md; `legend-data-monitor repack`

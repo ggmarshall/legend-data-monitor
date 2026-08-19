@@ -215,3 +215,28 @@ def test_apply_remove_keys_noop_without_entries():
     df = pd.DataFrame({"V02160A": range(10)}, index=idx, dtype=float)
     out = writer.apply_remove_keys(df, "p99", "r999")
     pd.testing.assert_frame_equal(out, df)
+
+def test_contract_file_carries_no_slack(tmp_path):
+    """uhi writes float64; narrowing it *in the file* would orphan the blocks.
+
+    Needs a histogram big enough that the storage arrays dominate the fixed
+    ~0.5 MB of HDF5 group metadata, or an orphaned float64 copy hides in the
+    noise.
+    """
+    import os
+
+    t, d, v, t0, t1 = _events(n=400_000, hours=300.0)
+    binned = binning.fill_time_series(t, d, v, DETS, t0, t1)
+    path = str(tmp_path / "l200-p19-r001-phy-geds.hdf")
+    writer.write_binned_series(path, "IsPulser", "Trapemax", binned)
+
+    with h5py.File(path, "r") as f:
+        stored = []
+        f.visititems(
+            lambda n, o: stored.append(o.id.get_storage_size())
+            if isinstance(o, h5py.Dataset)
+            else None
+        )
+        assert f["hist/IsPulser_Trapemax/1min/storage/values"].dtype == np.float32
+    # an orphaned float64 copy of the storage measures 1.37x here
+    assert os.path.getsize(path) < 1.15 * sum(stored)
