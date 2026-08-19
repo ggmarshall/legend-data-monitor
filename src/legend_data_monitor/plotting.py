@@ -383,6 +383,12 @@ def make_subsystem_plots(
 
         is_pdf_saved = render
 
+        # Drop this entry's frames before building the next one. Rebinding
+        # alone is too late: the next AnalysisData is fully constructed while
+        # these names still point at the previous ones, so the two largest
+        # objects in the run (~1 GB each for the QC entries) coexist.
+        del data_analysis, aux_analysis, aux_ratio_analysis, aux_diff_analysis
+
     if pdf is not None:
         pdf.close()
     if is_pdf_saved:

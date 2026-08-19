@@ -71,6 +71,22 @@ COLUMNS_TO_LOAD = [
     "cc4_channel",
 ]
 
+# On-disk layout for the pandas (v1) HDF outputs.
+#
+# blosc:lz4 is not just a size win: uncompressed fixed-format keys are stored
+# as *contiguous* arrays, so every chunk that rewrites a key orphans the old
+# block and the file ends up ~2.7x its live data. Compressed keys are chunked,
+# and HDF5 reuses their freed space -- so turning compression on removes the
+# slack as well. lz4 over zstd because these files are read back on every
+# chunk (append path), by the contract build, and by the dashboard; lz4 costs
+# ~5% more space than zstd but reads twice as fast.
+HDF_COMPRESSION = {"complib": "blosc:lz4", "complevel": 5}
+
+# Columns whose float64 precision is never meaningful for monitoring, but
+# which would double the size of every frame and every stored pivot. Excluded:
+# "timestamp" (unix seconds -- float32 cannot resolve a second at 1.7e9).
+NO_DOWNCAST_COLUMNS = {"timestamp"}
+
 # map position/location for special systems
 SPECIAL_SYSTEMS = {"pulser": 0, "pulser01ana": -1, "FCbsln": -2, "muon": -3}
 

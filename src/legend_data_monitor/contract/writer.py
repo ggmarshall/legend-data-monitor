@@ -11,6 +11,7 @@ import os
 from datetime import datetime, timezone
 
 import h5py
+import numpy as np
 import pandas as pd
 from uhi.io import hdf5 as uhi_hdf5
 
@@ -34,10 +35,15 @@ def write_hist(
             del f[key]
         group = f.create_group(key)
         uhi_hdf5.write(group, hist)
+        _narrow_storage(group)
         if mins is not None:
-            group.create_dataset("min", data=mins, compression="gzip")
+            group.create_dataset(
+                "min", data=np.asarray(mins, dtype=np.float32), compression="gzip"
+            )
         if maxs is not None:
-            group.create_dataset("max", data=maxs, compression="gzip")
+            group.create_dataset(
+                "max", data=np.asarray(maxs, dtype=np.float32), compression="gzip"
+            )
         for name, value in (attrs or {}).items():
             if value is not None:
                 group.attrs[name] = json.dumps(value) if isinstance(value, (list, dict)) else value
@@ -51,6 +57,42 @@ def write_hist(
             "axis_0: [underflow, ...bins..., overflow]; "
             "axis_1: [...categories..., flow]"
         )
+
+
+
+def _narrow_storage(group) -> None:
+    """Store histogram storage arrays at the precision they actually carry.
+
+    boost-histogram's views are float64 throughout, which doubles both the
+    file and the time a reader spends inflating it -- for values whose
+    relative error at float32 is ~6e-8, and for counts that are integers.
+    Halving them is the single biggest lever on how fast the dashboard opens
+    a run. Rewriting in place is safe for file size: the datasets uhi wrote
+    are gzip-chunked, so HDF5 hands the freed blocks straight back.
+    """
+    storage = group.get("storage")
+    if storage is None:
+        return
+    for name in list(storage):
+        dataset = storage[name]
+        if not isinstance(dataset, h5py.Dataset) or dataset.dtype != np.float64:
+            continue
+        values = dataset[...]
+        finite = np.isfinite(values)
+        if (
+            name == "counts"
+            and finite.all()
+            and values.min() >= 0
+            and values.max() < 2**31
+            and np.array_equal(values, np.rint(values))
+        ):
+            # signed on purpose: counts are integers, and a reader that
+            # subtracts two of them must get a negative number, not 4e9
+            narrowed = values.astype(np.int32)
+        else:
+            narrowed = values.astype(np.float32)
+        del storage[name]
+        storage.create_dataset(name, data=narrowed, compression="gzip")
 
 
 def write_binned_series(

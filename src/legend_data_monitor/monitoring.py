@@ -1576,7 +1576,7 @@ def build_new_files(generated_path: str, period: str, run: str, data_type="phy")
 
             # mean dataframe is kept
             if "_mean" in k:
-                original_df.to_hdf(new_file, key=k, mode="a")
+                original_df.to_hdf(new_file, key=k, mode="a", **utils.HDF_COMPRESSION)
                 continue
 
             original_df.index = pd.to_datetime(original_df.index)
@@ -1585,7 +1585,7 @@ def build_new_files(generated_path: str, period: str, run: str, data_type="phy")
             # substitute the original df with the resampled one
             original_df = resampled_df
             # append resampled data to the new file
-            resampled_df.to_hdf(new_file, key=k, mode="a")
+            resampled_df.to_hdf(new_file, key=k, mode="a", **utils.HDF_COMPRESSION)
 
         if idx == 0:
             json_output = os.path.join(

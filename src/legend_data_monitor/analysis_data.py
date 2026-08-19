@@ -15,6 +15,15 @@ from . import errors, save_data, subsystem, utils
 # -------------------------------------------------------------------------
 
 
+# Parameters whose whole point is the QC columns -- the only entries that need
+# every ``is_*`` / ``*_classifier`` column the subsystem happens to carry.
+QC_PARAMETERS = {
+    "quality_cuts",
+    "geds/quality/is_not_bb_like/is_delayed_discharge",
+    "geds/quality/is_bb_like",
+}
+
+
 class AnalysisData:
     """
     Object containing information for a data subselected from Subsystem data based on given criteria.
@@ -138,13 +147,24 @@ class AnalysisData:
         # always get basic parameters
         params_to_get = ["datetime"] + utils.COLUMNS_TO_LOAD + ["status"]
 
+        # The subsystem frame carries every QC flag and classifier as soon as
+        # *any* configured entry asks for them -- some 40 columns. Only the
+        # entries that plot them, or cut on them, have any use for them; for
+        # the rest they are ~85% of the frame this entry is about to copy.
+        requested = (
+            self.parameters if isinstance(self.parameters, list) else [self.parameters]
+        )
+        wants_qc = bool(QC_PARAMETERS.intersection(requested))
+        cut_columns = set(self.cuts if isinstance(self.cuts, list) else [self.cuts or ""])
+
         for col in sub_data.columns:
             # pulser flag is present only if subsystem.flag_pulser_events() was called -> needed to subselect phy/pulser events
             if "flag_pulser" in col or "flag_fc_bsln" in col or "flag_muon" in col:
                 params_to_get.append(col)
             # QC flag is present only if inserted as a cut in the config file -> this part is needed to apply
             if col.startswith("is_") or col.endswith("_classifier"):
-                params_to_get.append(col)
+                if wants_qc or col in cut_columns:
+                    params_to_get.append(col)
 
         # if special parameter, get columns needed to calculate it
         for param in self.parameters:
@@ -161,11 +181,7 @@ class AnalysisData:
                 else:
                     # otherwise just load it
                     params_to_get.append(param)
-            elif param in [
-                "quality_cuts",
-                "geds/quality/is_not_bb_like/is_delayed_discharge",
-                "geds/quality/is_bb_like",
-            ]:
+            elif param in QC_PARAMETERS:
                 utils.logger.info(
                     "... you are loading individual QC flags and/or classifiers"
                 )
@@ -185,9 +201,7 @@ class AnalysisData:
         params_to_get = list(np.unique(params_to_get))
 
         # check if there are the corresponding columns in the dataframe; otherwise, exit
-        if set(params_to_get).issubset(sub_data.columns):
-            self.data = sub_data[params_to_get].copy()
-        else:
+        if not set(params_to_get).issubset(sub_data.columns):
             utils.logger.error(
                 "\033[91mOne/more entry/entries among %s is/are not present in the dataframe. TRY AGAIN.\033[0m",
                 params_to_get,
@@ -196,12 +210,22 @@ class AnalysisData:
 
         # -------------------------------------------------------------------------
         # select phy/puls/all/Klines events
-        bad = self.select_events()
-        if bad:
+        #
+        # rows first, then columns: params_to_get carries every QC flag and
+        # classifier in the frame (any of them may appear in a cut), so
+        # copying the whole subsystem before throwing most of its rows away
+        # costs ~15x the memory a pulser entry actually needs.
+        mask = self.event_mask(sub_data)
+        if mask is None:
             utils.logger.error(
                 "\033[91mThe selection of desired events went wrong. Exit here!\033[0m"
             )
             return
+        self.data = (
+            sub_data[params_to_get].copy()
+            if mask is True
+            else sub_data.loc[mask, params_to_get]
+        )
 
         # convert cuts to boolean + apply cuts, if any
         self.path = analysis_info["path"]
@@ -212,48 +236,55 @@ class AnalysisData:
         # calculate if special parameter
         self.special_parameter()
 
-        # calculate channel mean
-        self.channel_mean()
-
-        # calculate variation if needed - only works after channel mean
-        self.calculate_variation()
+        # calculate channel mean and, from it, the % variation.
+        #
+        # Skipped for the QC entries: save_data.save_hdf writes "absolute
+        # values ONLY" for quality_cuts, so for ~30 flags/classifiers this
+        # would add 60 full-length columns and copy the whole frame twice in
+        # the channel-mean join, then throw all of it away.
+        if not wants_qc:
+            self.channel_mean()
+            self.calculate_variation()
 
         # little sorting, before closing the function
         self.data = self.data.sort_values(["channel", "datetime"])
 
-    def select_events(self):
-        # do we want to keep all, phy or pulser events?
+    def event_mask(self, data):
+        """Row mask selecting this entry's event type from ``data``.
+
+        Returns a boolean Series, ``True`` when every row is kept, or ``None``
+        for an unrecognised event type.
+        """
         if self.evt_type == "pulser":
             utils.logger.info("... keeping only pulser events")
-            self.data = self.data[self.data["flag_pulser"]]
-        elif self.evt_type == "FCbsln":
+            return data["flag_pulser"]
+        if self.evt_type == "FCbsln":
             utils.logger.info("... keeping only FC baseline events")
-            self.data = self.data[self.data["flag_fc_bsln"]]
-        elif self.evt_type == "muon":
+            return data["flag_fc_bsln"]
+        if self.evt_type == "muon":
             utils.logger.info("... keeping only muon events")
-            self.data = self.data[self.data["flag_muon"]]
-        elif self.evt_type == "phy":
+            return data["flag_muon"]
+        if self.evt_type == "phy":
             utils.logger.info(
                 "... keeping only physical (non-pulser & non-FCbsln & non-muon) events"
             )
-            self.data = self.data[
-                (~self.data["flag_pulser"])
-                & (~self.data["flag_fc_bsln"])
-                & (~self.data["flag_muon"])
-            ]
-        elif self.evt_type == "K_events":
+            return (
+                (~data["flag_pulser"]) & (~data["flag_fc_bsln"]) & (~data["flag_muon"])
+            )
+        if self.evt_type == "K_events":
             utils.logger.info("... selecting K lines in physical (non-pulser) events")
-            self.data = self.data[~self.data["flag_pulser"]]
             energy = utils.SPECIAL_PARAMETERS["K_events"][0]
-            self.data = self.data[
-                (self.data[energy] > 1430) & (self.data[energy] < 1575)
-            ]
-        elif self.evt_type == "all":
+            return (
+                (~data["flag_pulser"])
+                & (data[energy] > 1430)
+                & (data[energy] < 1575)
+            )
+        if self.evt_type == "all":
             utils.logger.info("... keeping all (pulser + non-pulser) events")
-        else:
-            utils.logger.error("\033[91mInvalid event type!\033[0m")
-            utils.logger.error("\033[91m%s\033[0m", self.__doc__)
-            return "bad"
+            return True
+        utils.logger.error("\033[91mInvalid event type!\033[0m")
+        utils.logger.error("\033[91m%s\033[0m", self.__doc__)
+        return None
 
     def convert_bitmasks(self):
         """Convert float64 bitmask columns into boolean columns based on the conditions saved in metadata."""
@@ -1049,3 +1080,9 @@ def load_subsystem_data(
             pd.DataFrame(),
             plot_info,
         )
+
+        # Drop this entry's frame before building the next one. Rebinding
+        # alone is too late: the new AnalysisData is fully constructed while
+        # the old name still points at the previous frame, so the two largest
+        # objects in the run (~1 GB each for the QC entries) coexist.
+        del data_analysis

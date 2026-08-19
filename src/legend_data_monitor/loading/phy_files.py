@@ -14,6 +14,7 @@ keys instead of relying on two loaders emitting identically ordered rows.
 
 import os
 
+import numpy as np
 import pandas as pd
 from lgdo import lh5
 
@@ -56,6 +57,9 @@ def load_channel_frame(
 
     fields = list(dict.fromkeys(list(params) + ["timestamp"]))
     frames = []
+    # the dtype each field actually has in the tier, before any concatenation
+    # gets a chance to widen it (see utils.narrow_to_native_dtypes)
+    native = {}
     for channel in channels:
         # read one file per call and concatenate: handing lh5.read_as the whole
         # file list is ~9x slower for the same rows (measured on p22/r012,
@@ -76,17 +80,20 @@ def load_channel_frame(
                 )
                 continue
             if frame is not None and len(frame):
+                native.update(frame.dtypes.items())
                 per_file.append(frame)
         if not per_file:
             continue
         frame = pd.concat(per_file, ignore_index=True) if len(per_file) > 1 else per_file[0]
-        frame["channel"] = int(channel[2:])
+        # rawids are 7-digit: int32 halves what is otherwise one of the widest
+        # columns in the frame, one entry per event
+        frame["channel"] = np.int32(int(channel[2:]))
         frames.append(frame)
 
     if not frames:
         return pd.DataFrame()
 
-    return pd.concat(frames, ignore_index=True)
+    return utils.narrow_to_native_dtypes(pd.concat(frames, ignore_index=True), native)
 
 
 def merge_tiers(frames: dict) -> pd.DataFrame:
@@ -111,7 +118,11 @@ def merge_tiers(frames: dict) -> pd.DataFrame:
         merged = merged.merge(
             frame.drop(columns=overlap), on=["channel", "timestamp"], how="outer"
         )
-    return merged
+    # the outer merge re-widens any column it had to NaN-fill
+    native = {}
+    for frame in present:
+        native.update(frame.dtypes.items())
+    return utils.narrow_to_native_dtypes(merged, native)
 
 
 def resolve_files(

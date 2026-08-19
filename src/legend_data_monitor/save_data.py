@@ -477,6 +477,12 @@ def get_pivot(
 ):
     """Get pivot: datetimes (first column) vs channels (other columns)."""
     df_pivot = df.pivot(index="datetime", columns="channel", values=parameter)
+    # the frame is loaded as float32, but the mean/variation arithmetic widens
+    # it again; store what we mean to store rather than what pandas inferred
+    if (df_pivot.dtypes == "float64").any():
+        df_pivot = df_pivot.astype(
+            {c: "float32" for c in df_pivot.columns if df_pivot[c].dtype == "float64"}
+        )
     # just select one row for mean values (since mean is constant over time for a given channel)
     # take into consideration parameters that are named with 'mean' in it, eg "bl_mean"
     if ("_mean" in parameter and parameter.count("mean") > 1) or (
@@ -488,14 +494,14 @@ def get_pivot(
     if saving == "append":
         # check if the file exists: if not, create a new one
         if not os.path.exists(file_path):
-            df_pivot.to_hdf(file_path, key=key_name, mode="a")
+            df_pivot.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
             return
         # the file exists, but this specific key was not saved - create the new key
         saved_keys = []
         with h5py.File(file_path, "r") as file:
             saved_keys = list(file.keys())
         if os.path.exists(file_path) and key_name not in saved_keys:
-            df_pivot.to_hdf(file_path, key=key_name, mode="a")
+            df_pivot.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
             return
 
         mean_pars = ["bl_mean", "pz_mean"]
@@ -505,7 +511,7 @@ def get_pivot(
             and parameter not in mean_pars
         ) or (parameter in mean_pars and parameter.count("mean") == 2):
             # for the mean entry, we overwrite the already existing content with the new mean value
-            df_pivot.to_hdf(file_path, key=key_name, mode="a")
+            df_pivot.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
 
         if "_mean" not in parameter or (
             "_mean" in parameter
@@ -518,19 +524,21 @@ def get_pivot(
                 new_mean = read_hdf(
                     file_path, key=key_name_orig + "_mean"
                 )  # gia' aggiornata (perche' la media la aggiorniamo prima delle variazioni %)
-                all_abs_data = read_hdf(
+                new_var_data = read_hdf(
                     file_path, key=key_name_orig
                 )  # df vecchio con TUTTI i valori assoluti (anche quelli di prima)
-                new_var_data = all_abs_data.copy()
 
-                # recompute % variations for all channels at once (column-aligned)
+                # recompute % variations for all channels at once (column-aligned).
+                # Overwriting the freshly-read frame in place saves a full copy
+                # of the largest object in the run (a classifier key is ~0.5 GB
+                # per 10 files, and this is the peak of the whole pipeline).
                 channels = list(df["channel"].unique())
                 new_var_data[channels] = (
-                    all_abs_data[channels].div(new_mean.iloc[0][channels]) - 1
+                    new_var_data[channels].div(new_mean.iloc[0][channels]) - 1
                 ) * 100
 
                 # Write the combined DataFrame to the HDF5 file
-                new_var_data.to_hdf(file_path, key=key_name, mode="a")
+                new_var_data.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
 
             # otherwise, just read the existing HDF5 file
             else:
@@ -538,12 +546,15 @@ def get_pivot(
                 existing_data = read_hdf(file_path, key=key_name)
                 # Concatenate the existing data and the new data
                 combined_data = concat([existing_data, df_pivot])
+                # the concat already copied both inputs: holding them across
+                # the write would keep three copies of the key alive at once
+                del existing_data
                 # Write the combined DataFrame to the HDF5 file
-                combined_data.to_hdf(file_path, key=key_name, mode="a")
+                combined_data.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
 
     # overwrite already existing data
     else:
-        df_pivot.to_hdf(file_path, key=key_name, mode="a")
+        df_pivot.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
 
 
 def check_existence_and_overwrite(file: str):

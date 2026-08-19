@@ -72,6 +72,74 @@ Two differences, both explained:
 must match) from cal-history-derived outputs (which legitimately drift as
 production adds runs).**
 
+## Output size and memory (2026-08-19)
+
+The pipeline was writing about 7x the disk it needed and holding about 2.3x
+the memory it needed. Both are now fixed, verified value-for-value against
+the previous output on a p22/r012 chunk: **200/200 v1 keys agree to float32
+epsilon (worst relative difference 6e-8), same key set, same indices**; the
+rebuilt contract file matches the old one across all 4006 datasets to the
+same tolerance.
+
+Measured on one 10-file chunk (production settings, `--plots off`):
+
+| | before | after |
+|---|---|---|
+| peak RSS | 3.23 GB | **1.42 GB** |
+| v1 file | 0.367 GB | **0.152 GB** |
+| wall | 307 s | 224 s |
+
+Per run at production chunk size the v1 file goes from **15.7 GB to ~2.2 GB**
+(the extra factor over the chunk measurement is slack, below) and the contract
+file from **1.06 GB to 0.79 GB**, which also makes it ~3x faster to inflate --
+the number the dashboard feels.
+
+Size, in order of size:
+
+1. **Slack, 2.7x.** An uncompressed fixed-format pandas key is a *contiguous*
+   array, so overwriting it orphans the block it replaces -- and the append
+   path rewrites every key it touches once per chunk. 15.34 GB of file for
+   5.63 GB of data. Compressed keys are chunked and HDF5 hands the freed
+   blocks straight back, so turning compression on removes the slack as a
+   side effect (reproduced both ways in `tests/test_output_layout.py`).
+2. **blosc:lz4 (`utils.HDF_COMPRESSION`), 2.6x with the dtype below.** Chosen
+   over zstd/zlib, which are ~5% smaller but read twice as slowly: these files
+   are re-read on every chunk, by the contract build, and by the dashboard.
+3. **float32 pivots.** Values whose relative error at float32 is 6e-8, stored
+   at float64.
+4. **Contract storage narrowed** to float32 values/variances and int32 counts
+   (`contract.writer._narrow_storage`). boost-histogram views are float64
+   throughout; counts are integers.
+
+Memory:
+
+1. **Dead mean/variation columns for the QC entries.** `save_hdf` writes
+   "absolute values ONLY" for `quality_cuts`, but `AnalysisData` still built
+   `<param>_mean` and `<param>_var` for ~30 flags/classifiers -- 60 extra
+   full-length columns (107 columns instead of 43) plus two whole-frame copies
+   in the channel-mean join, all discarded. Skipped now.
+2. **Two entries' frames alive at once.** Rebinding `data_analysis` in the
+   plot loop frees the previous frame only *after* the next one is fully
+   built, so the two largest objects in the run coexisted (~1 GB each).
+   Explicit `del` at the end of each iteration.
+3. **Rows before columns.** `params_to_get` carries every QC flag in the
+   frame, so copying the subsystem and *then* filtering to pulser events cost
+   ~15x what the entry needs.
+4. **Native tier dtypes restored** (`utils.narrow_to_native_dtypes`): a
+   channel missing a field NaN-fills it, and pandas widens the column to
+   float64 even when every tier that has it stores float32 -- six classifiers
+   on p22. Only that widening is undone: parameters the tier really stores as
+   float64 keep their precision, because `value/mean - 1` in float32 loses
+   most of the significant digits of a % variation (measured: 1e-5 % error on
+   `TrapemaxCtcCal_var`, against a 0.05 % limit -- fine, but free to avoid).
+5. **One fewer copy in the append path** (`del existing_data`; the `_var`
+   recompute now overwrites the frame it just read instead of copying it).
+
+`legend-data-monitor repack --output_folder ... --p p22 --r r000 ...` brings
+runs produced before this over without re-running the pipeline (minutes
+against hours). Contract files are independent of the v1 file once built;
+rebuilding one takes ~27 min.
+
 ## Remaining
 
 1. **Pickled-figure shelve writers** in `monitoring.py` (qc_distributions,

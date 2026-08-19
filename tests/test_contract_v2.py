@@ -2,6 +2,7 @@
 
 import json
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -117,8 +118,17 @@ def test_roundtrip_binned_series(tmp_path):
     v0, v1 = binned.hist.view(), back.hist.view()
     assert np.allclose(v0["count"], v1["count"])
     assert np.allclose(v0["value"], v1["value"], equal_nan=True)
-    assert np.array_equal(binned.mins, back.mins, equal_nan=True)
+    # storage is narrowed to float32 on write (halves the file and the time a
+    # reader spends inflating it); everything must still match to float32
+    assert np.allclose(binned.mins, back.mins, rtol=1e-6, equal_nan=True)
     assert list(back.detectors) == DETS
+
+    with h5py.File(path, "r") as f:
+        storage = f[keys[0]]["storage"]
+        assert storage["counts"].dtype == np.int32
+        assert storage["values"].dtype == np.float32
+        assert storage["variances"].dtype == np.float32
+        assert f[keys[0]]["min"].dtype == np.float32
 
     _, _, _, attrs = reader.read_hist(path, keys[0])
     assert attrs["unit"] == "keV"
@@ -177,6 +187,7 @@ def test_v2_readable_with_plain_h5py(tmp_path):
 import sys
 for mod in list(sys.modules):
     assert not mod.startswith("legend_data_monitor"), mod
+import h5py
 import h5py
 import numpy as np
 with h5py.File({path!r}, "r") as f:

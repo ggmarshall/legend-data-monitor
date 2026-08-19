@@ -184,6 +184,7 @@ def retrieve_scdb(config: str, port: int, pswd: str):
             out_path,
             key=param.replace("-", "_"),
             mode="a",
+            **utils.HDF_COMPRESSION,
         )
 
 
