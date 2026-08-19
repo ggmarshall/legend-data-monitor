@@ -79,7 +79,7 @@ def test_repack_run_covers_both_file_kinds(tmp_path):
 
 
 def _legacy_contract(tmp_path):
-    """A contract file as the writer produced it before the narrowing."""
+    """Build a contract file as the writer produced it before the narrowing."""
     import h5py
     from uhi.io import hdf5 as uhi_hdf5
 
@@ -158,7 +158,7 @@ SURVIVOR_KEYS = ["IsPulser_AoeCustom", "IsPulser_IsSaturated", "IsPulser_Trapema
 
 
 def _run_with_classifiers(tmp_path, with_contract=True, complete_contract=True):
-    """A current-layout v1 file with classifier pivots, plus its contract."""
+    """Build a current-layout v1 file with classifier pivots, plus its contract."""
     from legend_data_monitor.contract import writer
     from legend_data_monitor.processing import binning
 
@@ -198,7 +198,7 @@ def _run_with_classifiers(tmp_path, with_contract=True, complete_contract=True):
 
 
 def _livetime_key(v1):
-    """The key utils.get_livetime would pick (same selection expression)."""
+    """Return the key utils.get_livetime would pick (same selection expression)."""
     import h5py
 
     with h5py.File(v1, "r") as f:

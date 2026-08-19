@@ -165,8 +165,10 @@ def frame_to_binned(
     t_start: float | None = None,
     t_stop: float | None = None,
 ) -> BinnedTimeSeries:
-    """Bin a tidy frame (DatetimeIndex × detector columns) — bridge from the
-    existing pandas pipeline into the contract."""
+    """Bin a tidy frame (DatetimeIndex x detector columns).
+
+    The bridge from the existing pandas pipeline into the contract.
+    """
     ts_all = df.index.tz_convert("UTC") if df.index.tz else df.index.tz_localize("UTC")
     unix = ts_all.asi8 / 1e9
     detector_names = list(df.columns)

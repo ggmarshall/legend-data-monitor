@@ -141,8 +141,8 @@ def strip_classifier_pivots(
     so a v1 file is never stripped of the only copy of its data. QC flag
     (boolean) keys, ``_mean``/``_var``/``_info`` keys and parameters survive.
 
-    params
-    ------
+    Parameters
+    ----------
     generated_path : str
         Output root of a previous run (the folder containing ``generated``).
     period, run : str
@@ -152,9 +152,9 @@ def strip_classifier_pivots(
     experiment : str
         Experiment prefix in file names.
 
-    returns
+    Returns
     -------
-    sizes: tuple
+    sizes : tuple
         ``(before, after)`` file size in bytes; equal when nothing was done.
     """
     run_dir = os.path.join(generated_path, "generated/plt/hit", data_type, period, run)

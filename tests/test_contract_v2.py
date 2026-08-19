@@ -223,7 +223,7 @@ def test_apply_remove_keys_noop_without_entries():
 
 
 def test_contract_file_carries_no_slack(tmp_path):
-    """uhi writes float64; narrowing it *in the file* would orphan the blocks.
+    """Narrowing float64 *in the file* would orphan the blocks uhi wrote.
 
     Needs a histogram big enough that the storage arrays dominate the fixed
     ~0.5 MB of HDF5 group metadata, or an orphaned float64 copy hides in the

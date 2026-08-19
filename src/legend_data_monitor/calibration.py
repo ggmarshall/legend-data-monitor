@@ -1275,6 +1275,7 @@ def check_calibration_lac_ssc(
     det_info: dict,
     data_type="cal",
     save_pdf=False,
+    render: bool = True,
 ):
     """
     Check calibration stability for a given run and update monitoring summary YAML file in special LAC or SSC data.

@@ -8,7 +8,6 @@ full run. These tests pin that the per-column fill gives identical output.
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from legend_data_monitor.contract import schema
 from legend_data_monitor.processing import binning
@@ -30,7 +29,7 @@ def _frame(n=500, seed=3, with_gaps=True):
 
 
 def _long_format_reference(df, cadence=schema.BASE_CADENCE):
-    """The previous implementation, kept here as the equivalence oracle."""
+    """Replicate the previous implementation, kept here as the equivalence oracle."""
     ts_all = df.index.tz_convert("UTC") if df.index.tz else df.index.tz_localize("UTC")
     unix = ts_all.asi8 / 1e9
     names = list(df.columns)

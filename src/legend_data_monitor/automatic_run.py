@@ -723,6 +723,7 @@ def check_calib(
             det_info,
             save_pdf=save_pdf,
             data_type=data_type,
+            render=render,
         )
 
         utils.logger.debug(

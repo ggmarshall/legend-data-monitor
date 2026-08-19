@@ -237,8 +237,10 @@ def apply_remove_keys(df: pd.DataFrame, period: str, run: str) -> pd.DataFrame:
 
 
 def flagged_ranges(period: str) -> list:
-    """IGNORE_KEYS ranges for a period, exported to the manifest as flagged
-    (kept in the data; consumers display them shaded, not dropped)."""
+    """Return IGNORE_KEYS ranges for a period, exported to the manifest as flagged.
+
+    The ranges stay in the data; consumers display them shaded, not dropped.
+    """
     entry = (settings.IGNORE_KEYS or {}).get(period)
     if not entry:
         return []

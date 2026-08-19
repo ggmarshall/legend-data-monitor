@@ -6,7 +6,6 @@ now carries them.
 """
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from legend_data_monitor import calibration

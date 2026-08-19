@@ -1,7 +1,6 @@
 import io
 import os
 import pickle
-import shelve
 from typing import Union
 
 import matplotlib.patches as mpatches
@@ -15,6 +14,7 @@ from seaborn import color_palette
 from . import (
     analysis_data,
     errors,
+    monitoring,
     plot_styles,
     save_data,
     string_visualization,

@@ -8,7 +8,6 @@ the contract file and reports what it wrote.
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from legend_data_monitor import automatic_run
 from legend_data_monitor.contract import writer
