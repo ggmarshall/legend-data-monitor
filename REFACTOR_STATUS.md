@@ -139,9 +139,10 @@ Memory:
    recompute now overwrites the frame it just read instead of copying it).
 
 `legend-data-monitor repack --output_folder ... --p p22 --r r000 ...` brings
-runs produced before this over without re-running the pipeline (minutes
-against hours). Contract files are independent of the v1 file once built;
-rebuilding one takes ~27 min.
+runs produced before this over without re-running the pipeline: ~5 min a run
+against ~3 h to regenerate, and it covers both file kinds (v1 pivots 7.1x,
+contract 1.8x). It is idempotent, atomic per file, and never replaces a file
+it did not manage to shrink.
 
 ## Remaining
 

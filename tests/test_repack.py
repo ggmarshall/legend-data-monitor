@@ -64,12 +64,80 @@ def test_repack_leaves_the_original_when_it_fails(tmp_path, monkeypatch):
     assert not os.path.exists(path + ".repack")
 
 
-def test_repack_run_skips_contract_files(tmp_path):
+def test_repack_run_covers_both_file_kinds(tmp_path):
     path, _ = _legacy_run(tmp_path)
-    schema2 = path.replace("-geds.hdf", "-geds-schema2.hdf")
-    with open(schema2, "wb") as f:
-        f.write(b"not a pandas file")
+    contract, _ = _legacy_contract(
+        tmp_path / "generated/plt/hit/phy/p22/r000"
+    )
     results = repack.repack_run(str(tmp_path), "p22", "r000")
-    assert list(results) == [path]
-    with open(schema2, "rb") as f:
-        assert f.read() == b"not a pandas file"
+    assert sorted(results) == sorted([path, contract])
+    for before, after in results.values():
+        assert after < before
+
+
+# -------------------------------------------------------------------------
+# contract (schema2) files
+# -------------------------------------------------------------------------
+
+
+def _legacy_contract(tmp_path):
+    """A contract file as the writer produced it before the narrowing."""
+    import h5py
+    from uhi.io import hdf5 as uhi_hdf5
+
+    from legend_data_monitor.contract import schema, writer
+    from legend_data_monitor.processing import binning
+
+    dets = ["V02160A", "V02160B", "P00574A"]
+    rng = np.random.default_rng(3)
+    n, t0 = 200_000, 1_700_000_000.0
+    t1 = t0 + 300 * 3600
+    binned = binning.fill_time_series(
+        rng.uniform(t0, t1, n), rng.choice(dets, n), rng.normal(100, 5, n), dets, t0, t1
+    )
+    path = str(tmp_path / "l200-p22-r000-phy-geds-schema2.hdf")
+    with h5py.File(path, "w") as f:
+        f.attrs[schema.ROOT_ATTR] = schema.SCHEMA_VERSION
+        group = f.create_group("hist/IsPulser_Trapemax/1min")
+        uhi_hdf5.write(group, binned.hist)
+        group.attrs["schema"] = schema.SCHEMA_VERSION
+        group.create_dataset("min", data=binned.mins, compression="gzip")
+        group.create_dataset("max", data=binned.maxs, compression="gzip")
+    writer.write_frame(path, "detector_map", pd.DataFrame({"name": dets, "mass": [1.0, 2.0, 3.0]}))
+    return path, binned
+
+
+def test_repack_contract_narrows_storage_and_keeps_everything_readable(tmp_path):
+    import h5py
+
+    from legend_data_monitor.contract import reader
+
+    path, binned = _legacy_contract(tmp_path)
+    before, after = repack.repack_contract_hdf(path)
+    assert after < before
+
+    with h5py.File(path, "r") as f:
+        storage = f["hist/IsPulser_Trapemax/1min/storage"]
+        assert storage["values"].dtype == np.float32
+        assert storage["variances"].dtype == np.float32
+        assert storage["counts"].dtype == np.int32
+        assert f["hist/IsPulser_Trapemax/1min/min"].dtype == np.float32
+        assert f.attrs["schema"] if "schema" in f.attrs else True
+        # `axes` object references must still resolve after the compacting copy
+        refs = f["hist/IsPulser_Trapemax/1min/axes"][...]
+        assert [f[r].name.rsplit("/", 1)[-1] for r in refs] == ["axis_0", "axis_1"]
+
+    back = reader.read_binned_series(path, "IsPulser", "Trapemax", "1min")
+    assert np.allclose(
+        back.hist.view()["value"], binned.hist.view()["value"], rtol=1e-6, equal_nan=True
+    )
+    # the pandas frames alongside must survive the copy untouched
+    frame = pd.read_hdf(path, key="detector_map")
+    assert list(frame["name"]) == ["V02160A", "V02160B", "P00574A"]
+
+
+def test_repack_contract_is_idempotent(tmp_path):
+    path, _ = _legacy_contract(tmp_path)
+    _, once = repack.repack_contract_hdf(path)
+    before, after = repack.repack_contract_hdf(path)
+    assert before == after == once

@@ -19,6 +19,38 @@ from ..config import settings
 from . import schema
 
 
+
+def reference_targets(root) -> dict:
+    """Map each object-reference dataset under ``root`` to the names it points at.
+
+    h5py can copy referenced objects along with a tree (``expand_refs``), but
+    that is not idempotent: run over a file it produced itself it fails with
+    "destination object already exists". Our references only ever point inside
+    the tree being copied, so copy the tree verbatim and re-resolve the
+    references by name -- which is what these two helpers do.
+    """
+    targets = {}
+    file = root.file
+
+    def note(path, obj):
+        if isinstance(obj, h5py.Dataset) and h5py.check_dtype(ref=obj.dtype) is h5py.Reference:
+            targets[path] = [file[ref].name for ref in np.ravel(obj[...])]
+
+    root.visititems(note)
+    return targets
+
+
+def restore_references(root, targets: dict) -> None:
+    """Re-point copied reference datasets at the objects of ``root``'s file."""
+    file = root.file
+    for path, names in targets.items():
+        dataset = root[path]
+        flat = np.ravel(dataset[...])
+        for index, name in enumerate(names):
+            flat[index] = file[name].ref
+        dataset[...] = flat.reshape(dataset.shape)
+
+
 def write_hist(
     file_path: str,
     key: str,
@@ -36,11 +68,11 @@ def write_hist(
         # Assemble the group in memory and copy the finished, narrowed version
         # across. Letting uhi write float64 straight into the file and then
         # narrowing in place works, but HDF5 does not reclaim the blocks it
-        # orphans: measured 1.4x slack over a run's worth of keys. `axes` holds
-        # object references to the sibling ref_axes groups, and expand_refs
-        # remaps them into the destination rather than dangling or duplicating.
+        # orphans: measured 1.4x slack over a run's worth of keys.
         with h5py.File("uhi-staging", driver="core", backing_store=False, mode="w") as staging:
-            group = staging.create_group("hist")
+            # stage under the very path it will occupy, so the object
+            # references inside resolve by the same absolute name after the copy
+            group = staging.create_group(key)
             uhi_hdf5.write(group, hist)
             _narrow_storage(group)
             if mins is not None:
@@ -66,12 +98,14 @@ def write_hist(
             )
 
             parent, _, leaf = key.rpartition("/")
+            targets = reference_targets(group)
             staging.copy(
                 group,
                 f.require_group(parent) if parent else f,
                 name=leaf,
-                expand_refs=True,
+                expand_refs=False,
             )
+            restore_references(f[key], targets)
 
 
 def _narrow_storage(group) -> None:
