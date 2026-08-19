@@ -30,6 +30,23 @@ from .contract import writer
 _METADATA_SUFFIX = "_info"
 
 
+def _pandas_hdf_is_current(path: str) -> bool:
+    """Is this file already float32 and compressed? Cheap: reads no data."""
+    import tables
+
+    with tables.open_file(path) as f:
+        for node in f.walk_nodes("/", "Leaf"):
+            if not node.name.startswith("block") or not node.name.endswith("_values"):
+                continue
+            if node._v_parent._v_name.endswith(_METADATA_SUFFIX):
+                continue
+            if node.filters.complib != utils.HDF_COMPRESSION["complib"]:
+                return False
+            if node.dtype == np.float64:
+                return False
+    return True
+
+
 def repack_pandas_hdf(path: str) -> tuple:
     """Repack one pandas HDF file in place; return ``(before, after)`` bytes.
 
@@ -39,6 +56,8 @@ def repack_pandas_hdf(path: str) -> tuple:
     is left exactly as it was.
     """
     before = os.path.getsize(path)
+    if _pandas_hdf_is_current(path):
+        return before, before
     tmp = path + ".repack"
     if os.path.exists(tmp):
         os.remove(tmp)
@@ -165,9 +184,26 @@ def _compact(src: str, dst: str) -> None:
         writer.restore_references(target, targets)
 
 
+def _contract_hdf_is_current(path: str) -> bool:
+    """Is the histogram storage already narrowed? Cheap: reads no data."""
+    with h5py.File(path, "r") as f:
+        wide = []
+        f.visititems(
+            lambda name, obj: wide.append(name)
+            if isinstance(obj, h5py.Dataset)
+            and obj.dtype == np.float64
+            and name.startswith("hist/")
+            and name.endswith(_NARROWABLE)
+            else None
+        )
+    return not wide
+
+
 def repack_contract_hdf(path: str) -> tuple:
     """Repack one contract (schema2) file in place; return ``(before, after)``."""
     before = os.path.getsize(path)
+    if _contract_hdf_is_current(path):
+        return before, before
     tmp = path + ".repack"
     if os.path.exists(tmp):
         os.remove(tmp)
