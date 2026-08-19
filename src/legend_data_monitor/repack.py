@@ -78,7 +78,7 @@ def repack_run(
     data_type: str = "phy",
     experiment: str = "l200",
 ) -> dict:
-    """Repack every v1 pandas HDF of one run; return ``{path: (before, after)}``."""
+    """Repack every HDF output of one run; return ``{path: (before, after)}``."""
     run_dir = os.path.join(
         generated_path, "generated/plt/hit", data_type, period, run
     )
@@ -90,13 +90,20 @@ def repack_run(
         else:
             before, after = repack_pandas_hdf(path)
         results[path] = (before, after)
-        utils.logger.info(
-            "repacked %s: %.2f -> %.2f GB (%.1fx)",
-            os.path.basename(path),
-            before / 2**30,
-            after / 2**30,
-            before / max(after, 1),
-        )
+        if after == before:
+            utils.logger.info(
+                "%s already in the current layout (%.2f GB)",
+                os.path.basename(path),
+                before / 2**30,
+            )
+        else:
+            utils.logger.info(
+                "repacked %s: %.2f -> %.2f GB (%.1fx)",
+                os.path.basename(path),
+                before / 2**30,
+                after / 2**30,
+                before / max(after, 1),
+            )
     return results
 
 
