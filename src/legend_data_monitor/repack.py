@@ -18,6 +18,7 @@ This module brings existing files over without re-running the pipeline: a
 
 import glob
 import os
+import shutil
 
 import h5py
 import numpy as np
@@ -58,9 +59,8 @@ def repack_pandas_hdf(path: str) -> tuple:
     before = os.path.getsize(path)
     if _pandas_hdf_is_current(path):
         return before, before
-    tmp = path + ".repack"
-    if os.path.exists(tmp):
-        os.remove(tmp)
+    # pid-unique so concurrent invocations cannot clobber each other's tmp
+    tmp = f"{path}.repack.{os.getpid()}"
 
     try:
         with pd.HDFStore(path, "r") as store:
@@ -192,9 +192,7 @@ def strip_classifier_pivots(
         )
         return before, before
 
-    tmp = v1_file + ".repack"
-    if os.path.exists(tmp):
-        os.remove(tmp)
+    tmp = f"{v1_file}.repack.{os.getpid()}"
     try:
         for key in keys:
             if key in doomed:
@@ -285,20 +283,28 @@ def _compact(src: str, dst: str) -> None:
 
 
 def _contract_hdf_is_current(path: str) -> bool:
-    """Is the histogram storage already narrowed? Cheap: reads no data."""
+    """Is the storage already narrowed AND the file free of slack? Reads no data."""
+    stored = 0
     with h5py.File(path, "r") as f:
         wide = []
-        f.visititems(
-            lambda name, obj: (
-                wide.append(name)
-                if isinstance(obj, h5py.Dataset)
-                and obj.dtype == np.float64
+
+        def visit(name, obj):
+            nonlocal stored
+            if not isinstance(obj, h5py.Dataset):
+                return
+            stored += obj.id.get_storage_size()
+            if (
+                obj.dtype == np.float64
                 and name.startswith("hist/")
                 and name.endswith(_NARROWABLE)
-                else None
-            )
-        )
-    return not wide
+            ):
+                wide.append(name)
+
+        f.visititems(visit)
+    if wide:
+        return False
+    # narrowed but slacked (e.g. an interrupted earlier repack) still needs work
+    return os.path.getsize(path) < 1.15 * max(stored, 1)
 
 
 def repack_contract_hdf(path: str) -> tuple:
@@ -306,19 +312,23 @@ def repack_contract_hdf(path: str) -> tuple:
     before = os.path.getsize(path)
     if _contract_hdf_is_current(path):
         return before, before
-    tmp = path + ".repack"
-    if os.path.exists(tmp):
-        os.remove(tmp)
+    # narrow a scratch copy, never the original: a failure part-way must not
+    # leave the real file mutated (or half-narrowed yet reading as "current")
+    tmp = f"{path}.repack.{os.getpid()}"
+    tmp2 = tmp + ".compact"
     try:
-        _narrow_contract_datasets(path)
-        _compact(path, tmp)
-        after = os.path.getsize(tmp)
+        shutil.copyfile(path, tmp)
+        _narrow_contract_datasets(tmp)
+        _compact(tmp, tmp2)
+        os.remove(tmp)
+        after = os.path.getsize(tmp2)
         if after >= before:
-            os.remove(tmp)
+            os.remove(tmp2)
             return before, before
-        os.replace(tmp, path)
+        os.replace(tmp2, path)
         return before, after
     except BaseException:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+        for leftover in (tmp, tmp2):
+            if os.path.exists(leftover):
+                os.remove(leftover)
         raise

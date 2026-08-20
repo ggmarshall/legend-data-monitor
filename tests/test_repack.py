@@ -61,7 +61,13 @@ def test_repack_leaves_the_original_when_it_fails(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         repack.repack_pandas_hdf(path)
     assert os.path.getsize(path) == before
-    assert not os.path.exists(path + ".repack")
+    assert not _residue(path)
+
+
+def _residue(path):
+    import glob as _glob
+
+    return _glob.glob(path + ".repack*")
 
 
 def test_repack_run_covers_both_file_kinds(tmp_path):
@@ -215,7 +221,7 @@ def test_strip_removes_classifiers_and_nothing_else(tmp_path):
 
     assert after < before
     assert os.path.getsize(v1) == after
-    assert not os.path.exists(v1 + ".repack")
+    assert not _residue(v1)
 
     with pd.HDFStore(v1, "r") as store:
         keys = sorted(key.lstrip("/") for key in store.keys())
@@ -233,7 +239,7 @@ def test_strip_refuses_without_contract(tmp_path):
     got = repack.strip_classifier_pivots(str(tmp_path), "p22", "r000")
     assert got == (before, before)
     assert os.path.getsize(v1) == before
-    assert not os.path.exists(v1 + ".repack")
+    assert not _residue(v1)
     with pd.HDFStore(v1, "r") as store:
         assert len(store.keys()) == len(SURVIVOR_KEYS + CLASSIFIER_KEYS) + 1
 
@@ -255,3 +261,43 @@ def test_strip_is_idempotent(tmp_path):
     _, once = repack.strip_classifier_pivots(str(tmp_path), "p22", "r000")
     before, after = repack.strip_classifier_pivots(str(tmp_path), "p22", "r000")
     assert before == after == once
+
+
+def test_repack_contract_fixes_a_narrowed_but_slacked_file(tmp_path):
+    """An interrupted earlier repack leaves float32 storage with slack behind."""
+    import h5py
+
+    path, _ = _legacy_contract(tmp_path)
+    repack.repack_contract_hdf(path)
+    # fake the bad state: orphan a large block in the *middle* of the file
+    # (a trailing hole would just be truncated away at close)
+    with h5py.File(path, "r+") as f:
+        f.create_dataset("padding", data=np.zeros(500_000))
+    with h5py.File(path, "r+") as f:
+        f.create_dataset("keeper", data=np.zeros(8))
+    with h5py.File(path, "r+") as f:
+        del f["padding"]
+    slacked = os.path.getsize(path)
+    before, after = repack.repack_contract_hdf(path)
+    assert before == slacked
+    assert after < slacked
+    assert not _residue(path)
+
+
+def test_repack_contract_failure_leaves_original_untouched(tmp_path, monkeypatch):
+    path, _ = _legacy_contract(tmp_path)
+    before = os.path.getsize(path)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(repack, "_compact", boom)
+    with pytest.raises(RuntimeError):
+        repack.repack_contract_hdf(path)
+    assert os.path.getsize(path) == before
+    assert not _residue(path)
+    # the original must still be float64: nothing was narrowed in place
+    import h5py
+
+    with h5py.File(path, "r") as f:
+        assert f["hist/IsPulser_Trapemax/1min/storage/values"].dtype == np.float64
