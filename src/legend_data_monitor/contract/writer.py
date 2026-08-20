@@ -181,6 +181,14 @@ def write_distribution(
     return key
 
 
+def write_distribution_2d(
+    file_path: str, flag: str, param: str, hist, attrs: dict | None = None
+) -> str:
+    key = schema.dist2d_key(flag, param)
+    write_hist(file_path, key, hist, attrs=attrs)
+    return key
+
+
 def write_frame(file_path: str, key: str, frame: pd.DataFrame) -> str:
     """Write a small pandas frame (run means, detector map, calib pars)."""
     # same courtesy as write_hist: the period directory may not exist yet

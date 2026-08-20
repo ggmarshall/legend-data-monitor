@@ -107,10 +107,15 @@ def period_contract_path(
 
 
 def write_dead_time(
-    output_folder: str, period: str, run: str, dead_time_s: float, dead_time_pct: float
+    output_folder: str,
+    period: str,
+    run: str,
+    dead_time_s: float,
+    dead_time_pct: float,
+    data_type: str = "phy",
 ) -> str:
     """Record the discharge dead time of a run in the period contract file."""
-    path = period_contract_path(output_folder, period)
+    path = period_contract_path(output_folder, period, data_type)
     contract_writer.write_frame(
         path,
         f"dead_time/{run}",
@@ -121,13 +126,15 @@ def write_dead_time(
     return path
 
 
-def read_dead_time(output_folder: str, period: str, run: str) -> dict | None:
+def read_dead_time(
+    output_folder: str, period: str, run: str, data_type: str = "phy"
+) -> dict | None:
     """Dead time of a run, or None when it has not been computed yet.
 
     Callers must handle None: the value comes from qc_and_evt_summary_plots,
     which may not have run for this run yet.
     """
-    path = period_contract_path(output_folder, period)
+    path = period_contract_path(output_folder, period, data_type)
     if not os.path.isfile(path):
         return None
     try:
@@ -167,7 +174,7 @@ CALIB_RUNS = utils.CALIB_RUNS
 
 # -------------------------------------------------------------------------
 def write_qc_classifier_fractions(
-    output_folder: str, period: str, run: str, rows: list
+    output_folder: str, period: str, run: str, rows: list, data_type: str = "phy"
 ) -> str | None:
     """Write the in-range fractions behind the QC classifier distributions.
 
@@ -178,7 +185,7 @@ def write_qc_classifier_fractions(
     """
     if not rows:
         return None
-    path = period_contract_path(output_folder, period)
+    path = period_contract_path(output_folder, period, data_type)
     contract_writer.write_frame(path, f"qc_classifier_frac/{run}", pd.DataFrame(rows))
     return path
 
@@ -413,6 +420,7 @@ def write_ft_series(
     run: str,
     name: str,
     frame,
+    data_type: str = "phy",
 ) -> str | None:
     """Write a forced-trigger monitoring series into the period contract file.
 
@@ -424,7 +432,7 @@ def write_ft_series(
         return None
     if isinstance(frame, pd.Series):
         frame = frame.to_frame(name=name)
-    path = period_contract_path(output_folder, period)
+    path = period_contract_path(output_folder, period, data_type)
     contract_writer.write_frame(path, f"ft_summary/{name}/{run}", frame)
     return path
 
@@ -687,6 +695,19 @@ def qc_and_evt_summary_plots(
 
         ser_pass = pd.to_datetime(forced.timestamp[base & is_bb.is_bb_like], unit="s")
         ser_fail = pd.to_datetime(forced.timestamp[base & ~is_bb.is_bb_like], unit="s")
+
+        write_event_rate_qc(
+            output_folder,
+            period,
+            run,
+            {
+                "All events": ser,
+                "Delayed discharges": ser_dis,
+                "Failing QC": ser_fail,
+                "Surviving QC": ser_pass,
+            },
+            on_mass,
+        )
 
         for s, label, color in [
             (ser, "All events", "dimgrey"),
@@ -1011,8 +1032,63 @@ def compute_qc_rate_mhz(frame: pd.DataFrame, period: str) -> pd.Series | None:
     return filtered.sum(axis=0) / span * 1000
 
 
+def write_event_rate_qc(
+    output_folder: str,
+    period: str,
+    run: str,
+    series_by_label: dict,
+    on_mass: float,
+    data_type: str = "phy",
+) -> str | None:
+    """
+    Write the QC-split hourly event rates behind the event-rate figure.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring output root (the folder containing ``<period>/``).
+    period, run : str
+        Run the rates belong to.
+    series_by_label : dict
+        Label -> DatetimeIndex of event times; each is histogrammed hourly and
+        normalised to mHz/kg with ``on_mass``.
+    on_mass : float
+        Total ON detector mass in kg (kept as its own column, so consumers can
+        undo the normalisation).
+    data_type : str
+        Data type key of the period contract file.
+
+    Returns
+    -------
+    key: str or None
+        The key written, or None when every series is empty.
+    """
+    columns = {}
+    for label, times in (series_by_label or {}).items():
+        if times is None or len(times) == 0:
+            continue
+        counts, edges = np.histogram(
+            times, bins=pd.date_range(start=times.min(), end=times.max(), freq="h")
+        )
+        rate = pd.Series(
+            counts / 3600 * 1000 / on_mass, index=pd.DatetimeIndex(edges[:-1])
+        )
+        columns[label.lower().replace(" ", "_")] = rate
+    if not columns:
+        return None
+    frame = pd.DataFrame(columns)
+    frame["on_mass_kg"] = on_mass
+    path = period_contract_path(output_folder, period, data_type)
+    return contract_writer.write_frame(path, f"event_rate_qc/{run}", frame)
+
+
 def write_qc_rates(
-    output_folder: str, period: str, run: str, rates_by_par: dict, detectors: dict
+    output_folder: str,
+    period: str,
+    run: str,
+    rates_by_par: dict,
+    detectors: dict,
+    data_type: str = "phy",
 ) -> str | None:
     """Write per-(flag, detector) QC rates into the period contract file."""
     rawid_to_name = {info.get("daq_rawid"): name for name, info in detectors.items()}
@@ -1032,7 +1108,7 @@ def write_qc_rates(
             )
     if not rows:
         return None
-    path = period_contract_path(output_folder, period)
+    path = period_contract_path(output_folder, period, data_type)
     contract_writer.write_frame(path, f"qc_average/{run}", pd.DataFrame(rows))
     return path
 
@@ -1307,12 +1383,17 @@ def compute_qc_rate_series(
 
 
 def write_qc_rate_series(
-    output_folder: str, period: str, run: str, flag: str, rates: pd.DataFrame
+    output_folder: str,
+    period: str,
+    run: str,
+    flag: str,
+    rates: pd.DataFrame,
+    data_type: str = "phy",
 ) -> str | None:
     """Write a QC rate-versus-time frame into the period contract file."""
     if rates is None or rates.empty:
         return None
-    path = period_contract_path(output_folder, period)
+    path = period_contract_path(output_folder, period, data_type)
     contract_writer.write_frame(path, f"qc_rate_series/{flag}/{run}", rates)
     return path
 
@@ -1599,7 +1680,13 @@ def build_new_files(generated_path: str, period: str, run: str, data_type="phy")
 
 
 def write_stability_series(
-    output_folder: str, period: str, run: str, group: str, name: str, series: dict
+    output_folder: str,
+    period: str,
+    run: str,
+    group: str,
+    name: str,
+    series: dict,
+    data_type: str = "phy",
 ) -> str | None:
     """Write per-detector monitoring series into the period contract file.
 
@@ -1609,18 +1696,18 @@ def write_stability_series(
     series = {det: s for det, s in (series or {}).items() if s is not None and len(s)}
     if not series:
         return None
-    path = period_contract_path(output_folder, period)
+    path = period_contract_path(output_folder, period, data_type)
     contract_writer.write_frame(path, f"{group}/{name}/{run}", pd.DataFrame(series))
     return path
 
 
 def write_cal_points(
-    output_folder: str, period: str, run: str, rows: list
+    output_folder: str, period: str, run: str, rows: list, data_type: str = "phy"
 ) -> str | None:
     """Write the per-run calibration points marked on the stability figures."""
     if not rows:
         return None
-    path = period_contract_path(output_folder, period)
+    path = period_contract_path(output_folder, period, data_type)
     contract_writer.write_frame(path, f"cal_points/{run}", pd.DataFrame(rows))
     return path
 
@@ -1715,7 +1802,10 @@ def plot_time_series(
     results = {}
     # the series behind the pickled figures, published as contract data
     gain_shift_series = {}
+    gain_shift_std_series = {}
     param_series = {}
+    param_std_series = {}
+    pul_cusp_series = {}
     cal_point_rows = []
     cal_points_seen = set()
     for index_i in range(len(period_list)):
@@ -1837,6 +1927,12 @@ def plot_time_series(
                                 gain_shift_series.setdefault(plot_type, {})[
                                     channel_name
                                 ] = pulser_data["diff"]["kevdiff_av"]
+                                gain_shift_std_series.setdefault(plot_type, {})[
+                                    channel_name
+                                ] = pulser_data["diff"]["kevdiff_std"]
+                                pul_cusp_series[channel_name] = pulser_data["pul_cusp"][
+                                    "kevdiff_av"
+                                ]
                             else:
                                 ged_av = pulser_data["ged"]["kevdiff_av"].values.astype(
                                     float
@@ -1863,6 +1959,9 @@ def plot_time_series(
                                 gain_shift_series.setdefault(plot_type, {})[
                                     channel_name
                                 ] = pulser_data["ged"]["kevdiff_av"]
+                                gain_shift_std_series.setdefault(plot_type, {})[
+                                    channel_name
+                                ] = pulser_data["ged"]["kevdiff_std"]
 
                         plt.plot(
                             pars_data["run_start"] - pd.Timedelta(hours=5),
@@ -1882,11 +1981,15 @@ def plot_time_series(
                                     "run_start": start,
                                     "fep_diff": fep,
                                     "cal_const_diff": const,
+                                    "res": res,
+                                    "res_quad": res_quad,
                                 }
-                                for start, fep, const in zip(
+                                for start, fep, const, res, res_quad in zip(
                                     pars_data["run_start"],
                                     pars_data["fep_diff"],
                                     pars_data["cal_const_diff"],
+                                    pars_data["res"],
+                                    pars_data["res_quad"],
                                 )
                             ]
                         plt.plot(
@@ -2203,6 +2306,9 @@ def plot_time_series(
                                 param_series.setdefault(inspected_parameter, {})[
                                     channel_name
                                 ] = pulser_data["diff"]["kevdiff_av"]
+                                param_std_series.setdefault(inspected_parameter, {})[
+                                    channel_name
+                                ] = pulser_data["diff"]["kevdiff_std"]
                                 plt.fill_between(
                                     x,
                                     diff_av - diff_std,
@@ -2241,6 +2347,9 @@ def plot_time_series(
                                 param_series.setdefault(inspected_parameter, {})[
                                     channel_name
                                 ] = pulser_data["ged"]["kevdiff_av"]
+                                param_std_series.setdefault(inspected_parameter, {})[
+                                    channel_name
+                                ] = pulser_data["ged"]["kevdiff_std"]
                                 plt.fill_between(
                                     x,
                                     vals_av - vals_std,
@@ -2357,13 +2466,56 @@ def plot_time_series(
 
     for plot_type, series in gain_shift_series.items():
         write_stability_series(
-            output_folder, period, current_run, "gain_shift", plot_type, series
+            output_folder,
+            period,
+            current_run,
+            "gain_shift",
+            plot_type,
+            series,
+            data_type=data_type,
+        )
+    for plot_type, series in gain_shift_std_series.items():
+        write_stability_series(
+            output_folder,
+            period,
+            current_run,
+            "gain_shift",
+            f"{plot_type}_std",
+            series,
+            data_type=data_type,
         )
     for parameter, series in param_series.items():
         write_stability_series(
-            output_folder, period, current_run, "param_stability", parameter, series
+            output_folder,
+            period,
+            current_run,
+            "param_stability",
+            parameter,
+            series,
+            data_type=data_type,
         )
-    write_cal_points(output_folder, period, current_run, cal_point_rows)
+    for parameter, series in param_std_series.items():
+        write_stability_series(
+            output_folder,
+            period,
+            current_run,
+            "param_stability",
+            f"{parameter}_std",
+            series,
+            data_type=data_type,
+        )
+    write_stability_series(
+        output_folder,
+        period,
+        current_run,
+        "pul_cusp",
+        "kevdiff",
+        pul_cusp_series,
+        data_type=data_type,
+    )
+    write_cal_points(
+        output_folder, period, current_run, cal_point_rows, data_type=data_type
+    )
 
     with open(usability_map_file, "w") as f:
         yaml.dump(output, f)

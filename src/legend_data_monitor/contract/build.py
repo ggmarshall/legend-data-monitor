@@ -119,6 +119,23 @@ def build_contract_files(
                     attrs,
                 )
             )
+            # classifiers also get a per-detector distribution: the QC view
+            # draws one histogram per detector, and after the transport strip
+            # this is the only surviving event-level record of their shape.
+            # Fixed +-15 range (classifier values are sigma-like); outliers
+            # land in the flow bins, so in-range fractions stay derivable.
+            if "Classifier" in rest:
+                written_keys.append(
+                    writer.write_distribution_2d(
+                        v2_file,
+                        flag,
+                        rest,
+                        binning.fill_distribution_2d(
+                            frame, n_bins=76, value_range=(-15.0, 15.4)
+                        ),
+                        attrs,
+                    )
+                )
 
     if detectors:
         written_keys.append(writer.write_detector_map(v2_file, detectors))

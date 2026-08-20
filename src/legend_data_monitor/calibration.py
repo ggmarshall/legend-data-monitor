@@ -266,6 +266,7 @@ def check_escale(
     partitions_params = get_partitions_params(
         detectors_name, detector_status, run_dict, hit_map, dsp_map
     )
+    write_escale_summary(output_folder, period, current_run, partitions_params)
 
     output_dir_run = os.path.join(output_folder, period, current_run)
     os.makedirs(os.path.join(output_dir_run, "mtg"), exist_ok=True)
@@ -491,6 +492,71 @@ def evaluate_psd_performance(
     return results
 
 
+def write_psd_stability(
+    output_folder: str,
+    period: str,
+    current_run: str,
+    det_name: str,
+    run_labels: list,
+    mean_vals,
+    mean_errs,
+    sigma_vals,
+    sigma_errs,
+    eval_result: dict,
+    data_type: str = "cal",
+) -> str | None:
+    """
+    Write the per-run A/E fit means and sigmas behind the PSD stability figure.
+
+    One row per (detector, run): the fit values with errors plus the shift
+    verdicts, so the figure and the usability evaluation can be reproduced
+    without unpickling anything.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring output root (the folder containing ``<period>/``).
+    period, current_run : str
+        Run the frame is written under.
+    det_name : str
+        Detector the rows belong to.
+    run_labels : list
+        Runs covered by the fit results.
+    mean_vals, mean_errs, sigma_vals, sigma_errs : array-like
+        A/E fit results per run.
+    eval_result : dict
+        Output of :func:`evaluate_psd_performance`.
+    data_type : str
+        Data type key of the period contract file.
+
+    Returns
+    -------
+    key: str or None
+        The key written, or None when there was nothing to write.
+    """
+    if not run_labels:
+        return None
+    slow_failed = set(eval_result.get("slow_shift_fail_runs") or [])
+    sudden_failed = set(eval_result.get("sudden_shift_fail_runs") or [])
+    frame = pd.DataFrame(
+        {
+            "detector": det_name,
+            "run": run_labels,
+            "mean": np.asarray(mean_vals, dtype=float),
+            "mean_err": np.asarray(mean_errs, dtype=float),
+            "sigma": np.asarray(sigma_vals, dtype=float),
+            "sigma_err": np.asarray(sigma_errs, dtype=float),
+            "slow_shift": [r in slow_failed for r in run_labels],
+            "sudden_shift": [r in sudden_failed for r in run_labels],
+            "status": str(eval_result.get("status")),
+        }
+    )
+    path = monitoring.period_contract_path(output_folder, period, data_type)
+    return contract_writer.write_frame(
+        path, f"psd_stability/{current_run}/{det_name}", frame
+    )
+
+
 def evaluate_psd_usability_and_plot(
     period: str,
     current_run: str,
@@ -526,6 +592,20 @@ def evaluate_psd_usability_and_plot(
     # if all nan entries, comment and exit
     if eval_result["status"] is None:
         return
+
+    # output_dir is <monitoring root>/<period> here; the writer joins period
+    write_psd_stability(
+        os.path.dirname(os.path.normpath(output_dir)),
+        period,
+        current_run,
+        det_name,
+        run_labels,
+        mean_vals,
+        mean_errs,
+        sigma_vals,
+        sigma_errs,
+        eval_result,
+    )
 
     fig, axs = plt.subplots(2, 2, figsize=(15, 9), sharex=True)
     (ax1, ax3), (ax2, ax4) = axs
@@ -1223,6 +1303,81 @@ def check_calibration(
 
     with open(usability_map_file, "w") as f:
         yaml.dump(output, f)
+
+
+def write_escale_summary(
+    output_folder: str,
+    period: str,
+    run: str,
+    partitions_params: dict,
+    data_type: str = "cal",
+) -> str | None:
+    """
+    Write the per-detector multi-run energy-scale arrays behind the escale figures.
+
+    Flattens ``get_partitions_params`` output (det -> parameter [-> peak]
+    -> period-run -> scalar) into one long frame, so every panel of the
+    escale figure can be re-drawn (or re-checked) without unpickling it.
+    Calibration polynomial coefficients are expanded as ``cal_params_c<i>``.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring output root (the folder containing ``<period>/``).
+    period, run : str
+        Run the summary is written under (data covers all runs in the file).
+    partitions_params : dict
+        Output of :func:`get_partitions_params`.
+    data_type : str
+        Data type key of the period contract file.
+
+    Returns
+    -------
+    key: str or None
+        The key written, or None when nothing was flattened.
+    """
+    rows = []
+    for detector, params in (partitions_params or {}).items():
+        for parameter, entry in params.items():
+            if parameter == "cal_params":
+                for period_run, coefficients in entry.items():
+                    for i, value in enumerate(coefficients or []):
+                        rows.append(
+                            {
+                                "detector": detector,
+                                "parameter": f"cal_params_c{i}",
+                                "peak": "",
+                                "period_run": period_run,
+                                "value": float(value),
+                            }
+                        )
+                continue
+            for level_key, level_value in entry.items():
+                if isinstance(level_value, dict):  # peak-resolved parameter
+                    for period_run, value in level_value.items():
+                        rows.append(
+                            {
+                                "detector": detector,
+                                "parameter": parameter,
+                                "peak": str(level_key),
+                                "period_run": period_run,
+                                "value": float(value),
+                            }
+                        )
+                elif isinstance(level_value, (int, float, np.floating, np.integer)):
+                    rows.append(
+                        {
+                            "detector": detector,
+                            "parameter": parameter,
+                            "peak": "",
+                            "period_run": str(level_key),
+                            "value": float(level_value),
+                        }
+                    )
+    if not rows:
+        return None
+    path = monitoring.period_contract_path(output_folder, period, data_type)
+    return contract_writer.write_frame(path, f"escale/{run}", pd.DataFrame(rows))
 
 
 def write_fep_gain_contract(

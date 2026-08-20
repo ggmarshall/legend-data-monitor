@@ -159,6 +159,52 @@ def fill_distribution(
     return hist
 
 
+def fill_distribution_2d(
+    df: pd.DataFrame, n_bins: int = 100, value_range: tuple | None = None
+) -> bh.Histogram:
+    """
+    Per-detector distribution histogram of a pivot frame.
+
+    Same idea as :func:`fill_distribution` but with a detector category axis,
+    so consumers can draw one histogram per detector from a single key. All
+    detectors share one binning; out-of-range samples land in the flow bins.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Pivot frame, one column per detector.
+    n_bins : int
+        Number of value bins.
+    value_range : tuple, optional
+        (lo, hi) value axis range; derived from the finite data when omitted.
+
+    Returns
+    -------
+    hist: boost_histogram.Histogram
+        Regular(value) x StrCategory(detector) count histogram.
+    """
+    names = [str(c) for c in df.columns]
+    values = df.to_numpy(dtype=float).ravel()
+    labels = np.tile(np.array(names, dtype=object), len(df))
+    finite = np.isfinite(values)
+    values, labels = values[finite], labels[finite]
+    if value_range is None:
+        if len(values) == 0:
+            value_range = (0.0, 1.0)
+        else:
+            lo, hi = float(np.min(values)), float(np.max(values))
+            if lo == hi:
+                lo, hi = lo - 0.5, hi + 0.5
+            value_range = (lo, float(np.nextafter(hi, np.inf)))
+    hist = bh.Histogram(
+        bh.axis.Regular(n_bins, *value_range),
+        bh.axis.StrCategory(names, growth=False),
+    )
+    if len(values):
+        hist.fill(values, labels)
+    return hist
+
+
 def frame_to_binned(
     df: pd.DataFrame,
     cadence: str = schema.BASE_CADENCE,
