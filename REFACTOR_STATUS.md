@@ -158,9 +158,12 @@ pivots after the contract build.
   `hist/<key>/1min` for every key about to be removed -- a v1 file is never
   stripped of the only copy of its data. QC *flag* (boolean) keys,
   `_mean`/`_var`/`_info` keys and parameters all survive.
-- Wired as the last step of `task_build_monitoring_hdf` (after
-  `build_new_files`, whose res files resample every v1 key, and after the
-  contract build). Existing runs: `repack --strip-classifiers`.
+- Wired as a final `strip_transport` task that strips the period's
+  *previous* runs only: qc_plots also reads the pivots (so the strip must run
+  last), and the current run is still appending -- stripping it mid-run would
+  make the contract rebuild bin only post-strip chunks. A finished run is
+  stripped on the first invocation that processes a later run; a period's
+  last run (and any backfill) is caught by `repack --strip-classifiers`.
 - Verified on p22/r006: 200 -> 172 keys, all 172 survivors
   checksum-identical, livetime key selection unchanged
   (`IsPulser_AoeCustom` sorts before the classifier keys either way, pinned

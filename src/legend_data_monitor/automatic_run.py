@@ -252,9 +252,25 @@ def auto_run(
             metadata_path=os.path.join(auto_dir_path, "inputs"),
             data_type=data_type,
         )
-        # last: the classifier pivots were only the transport to the two
-        # builds above; the strip verifies the contract holds them first
-        repack.strip_classifier_pivots(files_folder, period, run, data_type=data_type)
+
+    def task_strip_transport(logger=None):
+        """Drop the v1 classifier pivots of the period's finished runs.
+
+        They were only the transport to the contract build and the res files
+        (qc_plots reads them too, so this runs last). The current run is left
+        alone: it is still appending, and stripping mid-run would make the
+        contract rebuild bin only post-strip chunks. Earlier runs are closed
+        once this run exists, so they are safe -- and each strip re-verifies
+        the contract holds every key before removing anything.
+        """
+        files_folder = os.path.join(output_folder, ref_version)
+        period_dir = os.path.join(phy_folder, period)
+        for done_run in sorted(os.listdir(period_dir)):
+            if done_run >= run or not re.fullmatch(r"r\d+", done_run):
+                continue
+            repack.strip_classifier_pivots(
+                files_folder, period, done_run, data_type=data_type
+            )
 
     def task_render_plots(logger=None):
         """Draw the run's figures from the contract file.
@@ -339,6 +355,9 @@ def auto_run(
             tasks.Task("phy_summary_plots", task_phy_summary_plots, period, run)
         )
         task_list.append(tasks.Task("qc_plots", task_qc_plots, period, run))
+        task_list.append(
+            tasks.Task("strip_transport", task_strip_transport, period, run)
+        )
     else:
         utils.logger.debug("No new files were detected.")
 
