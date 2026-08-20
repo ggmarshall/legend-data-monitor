@@ -236,6 +236,14 @@ Latent legacy bugs found while porting, all fixed:
 `collect_stability_series` (ex `plot_time_series`) also runs its period pass
 once per detector instead of twice (it was repeated per correction type).
 
+Verified on real p22/r012 data: a pre-deletion legacy reference produced 370
+shifter PDFs; the new renderers on the same tree reproduce **exactly the same
+370 names, every file within 0.87-1.00x size, zero outliers**. The full task
+wiring (check_calib + summary_plots + qc_avg_series, render on) produced 657
+PDFs across all families with **zero shelve files**, and the resulting
+`qcp_summary.yaml` matches the production-era r012 file on **899/899
+verdicts**. 329 tests green (+4 pre-existing failures), pre-commit clean.
+
 ## Remaining
 
 1. ~~**Pickled-figure shelve writers**~~ **DONE (2026-08-20)**, see above. Was:
