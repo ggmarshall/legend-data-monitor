@@ -41,6 +41,7 @@ def main():
     add_auto_run_parser(subparsers)
     add_plot_run_parser(subparsers)
     add_repack_parser(subparsers)
+    add_repair_parser(subparsers)
     add_get_exposure(subparsers)
     add_get_runinfo(subparsers)
 
@@ -437,6 +438,47 @@ def repack_cli(args):
         after / 2**30,
         before / max(after, 1),
     )
+    return 0
+
+
+def add_repair_parser(subparsers):
+    """Configure :func:`.repair.repair_parameter` command line interface."""
+    parser = subparsers.add_parser(
+        "repair_param",
+        description="""Regenerate one parameter for already-processed runs
+        without re-running the pipeline: replays its plot-config entries over
+        the recorded chunk lists, transplants the keys into the v1 files and
+        refreshes the matching contract keys in place.""",
+    )
+    parser.add_argument("--output_folder", required=True, help="auto_run output root.")
+    parser.add_argument("--ref_version", required=True, help="e.g. auto/v2.0.0.")
+    parser.add_argument("--p", required=True, help="Period, eg p22.")
+    parser.add_argument("--r", required=True, nargs="+", help="Run(s), eg r012.")
+    parser.add_argument("--parameter", required=True, help="e.g. bl_mean.")
+    parser.add_argument("--cluster", default="lngs", choices=["lngs", "nersc"])
+    parser.add_argument("--prod_root", default=None, help="Overrides --cluster.")
+    parser.add_argument("--data_type", default="phy")
+    parser.set_defaults(func=repair_cli)
+
+
+def repair_cli(args):
+    """Repair one parameter over one or more runs."""
+    from . import repair
+
+    prod_root = args.prod_root or repair.PROD_ROOTS[args.cluster]
+    for run in args.r:
+        replaced = repair.repair_parameter(
+            args.output_folder,
+            args.ref_version,
+            args.p,
+            run,
+            args.parameter,
+            prod_root=prod_root,
+            data_type=args.data_type,
+        )
+        legend_data_monitor.utils.logger.info(
+            "%s-%s: %d key(s) repaired", args.p, run, len(replaced)
+        )
     return 0
 
 

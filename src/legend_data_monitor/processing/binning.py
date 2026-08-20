@@ -141,17 +141,23 @@ def fill_time_series(
 def fill_distribution(
     values: np.ndarray, n_bins: int = 100, value_range: tuple | None = None
 ) -> bh.Histogram:
-    """1-D distribution histogram of all samples (replaces pickled figures)."""
+    """1-D distribution histogram of all samples (replaces pickled figures).
+
+    The default range covers the 0.5-99.5 percentiles: a single outlier
+    (a 3000 ADC noise burst among 10-50 ADC values) used to stretch the axis
+    so far that the bulk collapsed into one bin. The flow bins keep whatever
+    falls outside, so nothing is lost, only re-placed.
+    """
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     if value_range is None:
         if len(values) == 0:
             value_range = (0.0, 1.0)
         else:
-            lo, hi = float(np.min(values)), float(np.max(values))
+            lo, hi = (float(v) for v in np.percentile(values, [0.5, 99.5]))
             if lo == hi:
                 lo, hi = lo - 0.5, hi + 0.5
-            # upper bin edges are exclusive: nudge so the max sample is included
+            # upper bin edges are exclusive: nudge so the top sample is included
             value_range = (lo, float(np.nextafter(hi, np.inf)))
     hist = bh.Histogram(bh.axis.Regular(n_bins, *value_range))
     if len(values):
