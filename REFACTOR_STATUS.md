@@ -180,9 +180,66 @@ Declined for now (2026-08-19): dropping the contract's 1min min/max sidecars
 loading refactor that would take peak RSS from ~5.4 to ~3 GB (accepted 5.4 GB:
 r008-r012 measured 5.2-5.6 GB at production chunk size vs 14-17 before).
 
+## Dashboard R3 on real data (2026-08-20)
+
+The phy-v2 dashboard runs against real LNGS data (checkout
+`/data1/users/marshall/phy-dash/legend-monitor-dashboard`, branch
+`feat/contract-v2-phy` + main merge, commit b27ca85). Headless sweep of the
+phy view on p22/r012: v2 96 OK / 0 FAIL vs `lmon-v2-p22`; v1 fallback 48 OK /
+0 FAIL vs the live production tree (Histogram correctly v2-only). Two fixes
+shaken out: contract-reader caches now key on (path, mtime_ns, size) — equal
+mtime_ns across a rewrite on coarse-timestamp filesystems served stale
+manifests — and the reader roundtrip test now asserts float32 tolerances
+(the producer narrowed contract storage on 2026-08-19). Combos that render
+empty (IsBsln continuous params, EventRate) are absent from production's
+200-key v1 inventory too — widget options exceeding the produced key set is
+pre-existing. Serving: legend-login2 port 9000 (v2) / 9001 (v1 production
+tree); browser sign-off pending, then the branch gets pushed.
+
+## Phase 5c — figures from the contract; shelve/pickle deleted (2026-08-20)
+
+The eight generators are now compute -> contract write (+ YAML verdicts) only;
+every figure is drawn from the contract by `plots/{qc,summary,stability,calib}`
+with the legacy PDF names/locations preserved verbatim (the shifter cloud-upload
+interface). `shelve`/`pickle` are gone from the package — the one exception is
+`calibration.read_dataflow_stability`, which reads an *external* dataflow
+shelve. `--write-shelves` is removed; `--plots off` is now truly data-only
+(the summary/qc tasks used to draw regardless). `plot_run` regenerates the
+complete figure set from the contract in seconds.
+
+New with this pass: classifier `_dist2d` per-detector histograms in the run
+contract (fixed ±15 range, flow bins catch outliers); `event_rate_qc`,
+`escale/<run>`, `psd_stability/<run>/<det>`, gain/param `_std` companions,
+`pul_cusp` trace and `res`/`res_quad` columns on `cal_points` in the period
+files; `calibration.evaluate_escale_metrics` (data-only twin of the verdicts
+the escale figure used to compute while drawing).
+
+Latent legacy bugs found while porting, all fixed:
+
+1. `plot_variable` iterated `for period in periods` with `periods` being the
+   *string* "p22" — the per-period grouping and `exclude_period` never worked
+   (single lumped series), and the escale issue details were recorded under
+   period `'p'`, so `pop_detail("p22", ...)` never found them: cal issues
+   shipped without observed/threshold magnitudes. Verdict math kept
+   bit-compatible (global ON-mean); details now attach.
+2. `qc_average` reset `dt_condition` per flag, so the IsSaturated iteration
+   always overwrote the `tot_discharge_dead_time` verdict with True.
+3. The corrected-branch `results` update did `ndarray.values` (AttributeError
+   waiting for the first run where PULS01ANA correction applies to
+   TrapemaxCtcCal).
+4. The per-string classifier-figure shelve key had no string component, so
+   every string overwrote the previous figure; and
+   `IsValidBlSlopeRmsClassifier` was listed twice (duplicate rows/PDFs).
+5. `check_psd`'s shared shelve path was missing the `mtg/` segment its own
+   fallback used.
+
+`collect_stability_series` (ex `plot_time_series`) also runs its period pass
+once per detector instead of twice (it was repeated per correction type).
+
 ## Remaining
 
-1. **Pickled-figure shelve writers** in `monitoring.py` (qc_distributions,
+1. ~~**Pickled-figure shelve writers**~~ **DONE (2026-08-20)**, see above. Was:
+   **Pickled-figure shelve writers** in `monitoring.py` (qc_distributions,
    qc_and_evt_summary_plots, box_summary_plot, qc_average, qc_time_series,
    plot_time_series) and `calibration.py` (fep_gain_variation,
    evaluate_psd_usability_and_plot): split each into data-computation → contract

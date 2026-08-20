@@ -1,16 +1,13 @@
 import glob
 import os
-import pickle
-import shelve
 
 import awkward as ak
 import lh5
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yaml
 
-from . import monitoring, plotting, utils
+from . import monitoring, utils
 from .contract import writer as contract_writer
 
 
@@ -230,8 +227,7 @@ def check_escale(
     period: str,
     current_run: str,
     det_info: dict,
-    save_pdf: bool,
-) -> None:
+) -> dict:
     """
     Run energy-scale calibration checks and generate detector plots.
 
@@ -249,8 +245,11 @@ def check_escale(
         Run to inspect.
     det_info : dict
         Dictionary containing detector metadata.
-    save_pdf : bool
-        True if you want to save pdf files too; default: False.
+
+    Returns
+    -------
+    detector_status : dict
+        Usability per detector and period-run (feeds the escale renderer).
     """
     utils.logger.debug("...inspecting energy-scale stability in cal runs")
     hit_map = utils.build_file_map(auto_dir_path, tier="hit")
@@ -275,57 +274,23 @@ def check_escale(
     )
     escale_data = utils.load_yaml_or_default(usability_map_file, det_info["detectors"])
 
-    escale_shelf_path = os.path.join(
-        output_folder, period, "mtg", f"l200-{period}-cal-monitoring"
-    )
-    os.makedirs(os.path.dirname(escale_shelf_path), exist_ok=True)
-    with monitoring.open_shelf(escale_shelf_path) as escale_shelf:
-        for det_name in detectors_name:
-            eval_result = plotting.plot_all_detector_info(
-                det_name,
-                det_info,
-                partitions_params,
-                detector_status,
-                period,
-                current_run,
-                output_folder,
-                save_pdf=save_pdf,
-                exclude_period=["p05", "p10", "p11", "p13", "p15", "p17"],
-                shelf=escale_shelf,
-            )
-
-            # update psd status
+    for det_name in detectors_name:
+        eval_result = evaluate_escale_metrics(
+            det_name,
+            partitions_params[det_name],
+            detector_status[det_name]["usability"],
+            period,
+            current_run,
+        )
+        for metric, verdict in eval_result.items():
             utils.update_evaluation_in_memory(
-                escale_data,
-                det_name,
-                "cal",
-                "escale_fwhm_FEP",
-                eval_result["escale_fwhm_FEP"],
-            )
-            utils.update_evaluation_in_memory(
-                escale_data,
-                det_name,
-                "cal",
-                "escale_fwhm_583",
-                eval_result["escale_fwhm_583"],
-            )
-            utils.update_evaluation_in_memory(
-                escale_data,
-                det_name,
-                "cal",
-                "escale_FEP_pos",
-                eval_result["escale_FEP_pos"],
-            )
-            utils.update_evaluation_in_memory(
-                escale_data,
-                det_name,
-                "cal",
-                "escale_SEP_residual",
-                eval_result["escale_SEP_residual"],
+                escale_data, det_name, "cal", metric, verdict
             )
 
     with open(usability_map_file, "w") as f:
         yaml.dump(escale_data, f, sort_keys=False)
+
+    return detector_status
 
 
 def load_fit_pars_from_yaml(
@@ -557,25 +522,20 @@ def write_psd_stability(
     )
 
 
-def evaluate_psd_usability_and_plot(
+def evaluate_psd_usability(
     period: str,
     current_run: str,
     fit_results_cal: dict,
     det_name: str,
-    location,
     output_dir: str,
     psd_data: dict,
-    save_pdf: bool,
-    shelf=None,
 ):
-    """Plot PSD stability results across runs, evaluate performance, and save both plot and evaluation summary.
+    """Evaluate PSD stability across runs and publish the numbers behind it.
 
-    If ``shelf`` (an open shelve object) is given it is used directly;
-    otherwise the monitoring shelve is opened and closed per call.
+    Data-only: the figure is drawn from the contract by
+    ``plots.calib.plot_psd_stability``.
     """
-    monitoring.apply_monitoring_style()
     run_labels = sorted(fit_results_cal.keys())
-    run_positions = list(range(len(run_labels)))
 
     # extract values
     mean_vals = utils.none_to_nan([fit_results_cal[r]["mean"] for r in run_labels])
@@ -607,140 +567,6 @@ def evaluate_psd_usability_and_plot(
         eval_result,
     )
 
-    fig, axs = plt.subplots(2, 2, figsize=(15, 9), sharex=True)
-    (ax1, ax3), (ax2, ax4) = axs
-
-    # Mean stability
-    mean_avg, mean_std = np.nanmean(mean_vals), np.nanstd(mean_vals)
-    ax1.errorbar(
-        run_positions,
-        mean_vals,
-        yerr=mean_errs,
-        fmt="s",
-        color="blue",
-        capsize=4,
-        label=r"$\mu_i$",
-    )
-    ax1.axhline(
-        mean_avg,
-        linestyle="--",
-        color="steelblue",
-        label=rf"$\bar{{\mu}} = {mean_avg:.5f}$",
-    )
-    ax1.fill_between(
-        run_positions,
-        mean_avg - mean_std,
-        mean_avg + mean_std,
-        color="steelblue",
-        alpha=0.2,
-        label="±1 std dev",
-    )
-    ax1.set_ylabel("Mean stability")
-    ax1.grid(True, alpha=0.3)
-    ax1.legend(fontsize=12)
-
-    # Sigma stability
-    sigma_avg, sigma_std = np.nanmean(sigma_vals), np.nanstd(sigma_vals)
-    ax2.errorbar(
-        run_positions,
-        sigma_vals,
-        yerr=sigma_errs,
-        fmt="s",
-        color="darkorange",
-        capsize=4,
-        label=r"$\sigma_i$",
-    )
-    ax2.axhline(
-        sigma_avg,
-        linestyle="--",
-        color="peru",
-        label=rf"$\bar{{\sigma}} = {sigma_avg:.5f}$",
-    )
-    ax2.fill_between(
-        run_positions,
-        sigma_avg - sigma_std,
-        sigma_avg + sigma_std,
-        color="peru",
-        alpha=0.2,
-        label="±1 std dev",
-    )
-    ax2.set_ylabel("Sigma stability")
-    ax2.set_xlabel("Run")
-    ax2.grid(True, alpha=0.3)
-    ax2.legend(fontsize=12)
-
-    # Slow shifts
-    ax3.plot(
-        run_positions,
-        eval_result["slow_shifts"],
-        marker="^",
-        markersize=10,
-        linestyle="-",
-        color="darkorchid",
-        label="Slow shifts",
-    )
-    ax3.axhline(0, color="black", linestyle="--")
-    ax3.axhline(0.5, color="crimson", linestyle="--")
-    ax3.axhline(-0.5, color="crimson", linestyle="--")
-    ax3.set_ylabel(r"$(\mu_i - \mu_0)/\bar{\sigma}$")
-    ax3.grid(True, alpha=0.3)
-    ax3.legend(loc="upper left", bbox_to_anchor=(0, 0.95), fontsize=12)
-
-    # Sudden shifts
-    y = np.array(eval_result["sudden_shifts"])
-    x = np.array(run_positions)
-    ax4.plot(
-        x,
-        y,
-        marker="^",
-        markersize=10,
-        linestyle="-",
-        color="green",
-        label="Sudden shifts",
-    )
-    ax4.axhline(0, color="black", linestyle="--")
-    ax4.axhline(0.25, color="crimson", linestyle="--")
-    ax4.set_ylabel(r"$|(\mu_{i}-\mu_{i-1})/\sigma_i|$")
-    ax4.set_xlabel("Run")
-    ax4.grid(True, alpha=0.3)
-    ax4.legend(loc="upper left", bbox_to_anchor=(0, 0.95), fontsize=12)
-
-    for ax in axs.flatten():
-        ax.set_xticks(run_positions)
-        ax.set_xticklabels(run_labels, rotation=0)
-
-    fig.suptitle(det_name, fontsize=16)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-    output_dir = os.path.join(output_dir, "mtg")
-
-    if save_pdf:
-        pdf_folder = os.path.join(output_dir, "pdf", f"st{location[0]}")
-        os.makedirs(pdf_folder, exist_ok=True)
-        plt.savefig(
-            os.path.join(
-                pdf_folder,
-                f"{period}_string{location[0]}_pos{location[1]}_{det_name}_AoE_stab.pdf",
-            ),
-            bbox_inches="tight",
-        )
-
-    # store the serialized plot in a shelve object under key
-    serialized_plot = pickle.dumps(plt.gcf())
-    shelf_key = f"{period}_string{location[0]}_pos{location[1]}_{det_name}_AoE_stab"
-    if shelf is not None:
-        shelf[shelf_key] = serialized_plot
-    else:
-        with monitoring.open_shelf(
-            os.path.join(
-                output_dir,
-                f"l200-{period}-cal-monitoring",
-            )
-        ) as own_shelf:
-            own_shelf[shelf_key] = serialized_plot
-
-    plt.close()
-
     # update psd status
     utils.update_evaluation_in_memory(
         psd_data, det_name, "cal", "AoE_stab", eval_result["status"]
@@ -755,10 +581,9 @@ def check_psd(
     period: str,
     current_run: str,
     det_info: dict,
-    save_pdf: bool,
 ):
     """
-    Evaluate the PSD usability for a set of detectors based on calibration results; save results in a YAML summary file; plot per-detector PSD stability data and store them as shelve file (and pdf if wanted).
+    Evaluate the PSD usability for a set of detectors based on calibration results; save results in a YAML summary file and publish the per-detector stability data to the cal period contract.
 
     Parameters
     ----------
@@ -776,8 +601,6 @@ def check_psd(
         Run to inspect.
     det_info : dict
         Dictionary containing detector metadata.
-    save_pdf : bool
-        True if you want to save pdf files too; default: False.
     """
     if not any(current_run in file for file in pars_files_list):
         utils.logger.debug(
@@ -796,10 +619,6 @@ def check_psd(
 
     detectors_name = list(det_info["detectors"].keys())
     detectors_list = [det_info["detectors"][d]["channel_str"] for d in detectors_name]
-    locations_list = [
-        (det_info["detectors"][d]["string"], det_info["detectors"][d]["position"])
-        for d in detectors_name
-    ]
 
     psd_data = utils.load_yaml_or_default(usability_map_file, det_info["detectors"])
 
@@ -826,23 +645,16 @@ def check_psd(
         utils.logger.debug("...no data are available at the moment")
         return
 
-    # inspect one single det: plot+saving (one shelve open for all detectors)
     utils.logger.debug("...inspecting PSD stability in cal runs")
-    with monitoring.open_shelf(
-        os.path.join(output_dir, period, f"l200-{period}-cal-monitoring")
-    ) as shelf:
-        for idx, det_name in enumerate(detectors_name):
-            evaluate_psd_usability_and_plot(
-                period,
-                current_run,
-                cal_psd_info[det_name],
-                det_name,
-                locations_list[idx],
-                os.path.join(output_dir, period),
-                psd_data,
-                save_pdf,
-                shelf=shelf,
-            )
+    for det_name in detectors_name:
+        evaluate_psd_usability(
+            period,
+            current_run,
+            cal_psd_info[det_name],
+            det_name,
+            os.path.join(output_dir, period),
+            psd_data,
+        )
 
     with open(usability_map_file, "w") as f:
         yaml.dump(psd_data, f, sort_keys=False)
@@ -897,113 +709,41 @@ def fep_gain_variation(
     chmap: dict,
     timestamps: np.ndarray,
     values: np.ndarray,
-    output_dir: str,
-    save_pdf: bool,
-    shelf: shelve.Shelf | None,
-    render: bool = True,
-):
+) -> tuple:
     """
-    Compute and plot FEP gain variation for a single detector; optional pdf saving; store a serialized plot in a shelve object.
+    Compute the FEP gain variation for a single detector.
+
+    Data-only: the numbers land in the contract via
+    :func:`write_fep_gain_contract` and the figure is drawn from there by
+    ``plots.stability.plot_fep_gain``.
 
     Parameters
     ----------
-    period : str
-        Period to inspect.
-    run : str
+    period, run : str
         Run to inspect.
     pars : dict
         Calibration results dictionary for a given detector.
     chmap : dict
-        Dictionary with detector info, must include 'name', 'string', 'position'.
+        Detector info with 'name', 'string', 'position'.
     timestamps : np.ndarray
-        Array of timestamps for a given detector.
+        Event timestamps for the detector.
     values : np.ndarray
-        Array of energies for a given detector.
-    output_dir : str
-        Path to output folder where plots will be stored.
-    save_pdf : bool
-        If True, save a PDF of the plot.
-    shelf : shelve.Shelf
-        Open shelve object where serialized plots will be stored.
+        FEP energies for the detector.
+
+    Returns
+    -------
+    means, computed : tuple
+        Per-bin drift (None when no bin has enough entries) and the full
+        :func:`compute_fep_gain_variation` result.
     """
-    ged = chmap["name"]
-    string = chmap["string"]
-    position = chmap["position"]
-
-    min_counts = 5
     computed = compute_fep_gain_variation(
-        timestamps, values, bin_size=600, min_counts=min_counts
+        timestamps, values, bin_size=600, min_counts=5
     )
-    bins = computed["bins"]
-    stats = computed["stats"]
-    baseline = computed["baseline"]
-    means = computed["drift"]
-    valid_means = stats["mean"].dropna()
-
-    if not render:
-        return means, computed
-
-    monitoring.apply_monitoring_style()
-    fig, ax = plt.subplots(figsize=(10, 5))
-
-    if not valid_means.empty:
-        norm_values = (values - baseline) / baseline * 2039
-
-        x_bins = bins
-        y_bins = np.linspace(-10, 10, 40)
-
-        ax.hist2d(timestamps, norm_values, bins=(x_bins, y_bins), cmap="Blues")
-        fig.colorbar(ax.collections[0], label="Counts")
-
-        ax.plot(stats["time"], means, "x-", color="red", label="10 min mean")
-
-        ax.fill_between(
-            stats["time"],
-            (stats["mean"] - stats["std"] - baseline) / baseline * 2039,
-            (stats["mean"] + stats["std"] - baseline) / baseline * 2039,
-            color="red",
-            alpha=0.15,
-            label="±1 std",
-        )
-
-    ax.axhline(-2, ls="--", color="black", label=r"$\pm$2 keV threshold")
-    ax.axhline(2, ls="--", color="black")
-    ax.axhspan(2, 500, color="gray", alpha=0.25)
-    ax.axhspan(-2, -500, color="gray", alpha=0.25)
-    plt.ylim(-10, 10)
-
-    plt.xlabel("Time (s)")
-    plt.ylabel("FEP gain variation (keV)")
-    plt.title(f"{period} {run} string {string} position {position} {ged}")
-    plt.legend(loc="lower left", title=f"Minimum counts = {min_counts}")
-    plt.tight_layout()
-
-    if save_pdf:
-        pdf_folder = os.path.join(output_dir, period, run, "mtg/pdf", f"st{string}")
-        os.makedirs(pdf_folder, exist_ok=True)
-        plt.savefig(
-            os.path.join(
-                pdf_folder,
-                f"{period}_{run}_string{string}_pos{position}_{ged}_FEP_gain_stab.pdf",
-            ),
-            bbox_inches="tight",
-        )
-
-    # store the serialized plot in a shelve object under key
-    if shelf is not None:
-        serialized_plot = pickle.dumps(plt.gcf())
-        shelf[f"{period}_{run}_str{string}_pos{position}_{ged}_FEP_gain_stab"] = (
-            serialized_plot
-        )
-    plt.close()
-
-    if valid_means.empty:
+    if computed["stats"]["mean"].dropna().empty:
         return None, computed
+    return computed["drift"], computed
 
-    return means, computed
 
-
-#: minimum populated bins before dataflow's stability arrays can replace
 #: lmon's own event pass — see read_dataflow_stability
 DATAFLOW_STABILITY_MIN_BINS = 5
 
@@ -1096,8 +836,6 @@ def check_calibration(
     run: str,
     first_run: bool,
     det_info: dict,
-    save_pdf=False,
-    render: bool = True,
 ):
     """
     Check calibration stability for a given run and update monitoring summary YAML file.
@@ -1116,8 +854,6 @@ def check_calibration(
         Flag indicating whether this is the first run of the period.
     det_info : dict
         Dictionary containing detector metadata.
-    save_pdf : bool
-        True if you want to save pdf files too; default: False.
     """
     detectors = det_info["detectors"]
     usability_map_file = os.path.join(
@@ -1159,13 +895,7 @@ def check_calibration(
             )
             first_run = True
 
-    shelve_path = os.path.join(
-        output_folder,
-        period,
-        run,
-        f"mtg/l200-{period}-{run}-cal-monitoring",
-    )
-    os.makedirs(os.path.dirname(shelve_path), exist_ok=True)
+    os.makedirs(os.path.join(output_folder, period, run, "mtg"), exist_ok=True)
     utils.logger.debug("...inspecting FEP, calib peaks, stability in calibrations")
 
     hit_files = sorted(
@@ -1176,114 +906,105 @@ def check_calibration(
 
     available_channels = set(lh5.ls(hit_files[0], ""))
 
-    with monitoring.open_shelf(shelve_path) as shelf:
-        for ged, item in detectors.items():
-            if not item["processable"]:
-                continue
+    for ged, item in detectors.items():
+        if not item["processable"]:
+            continue
 
-            # avoid cases where the detector is not present in the output files
-            if item["channel_str"] not in available_channels:
-                continue
+        # avoid cases where the detector is not present in the output files
+        if item["channel_str"] not in available_channels:
+            continue
 
-            hit_files_data = read_channel_events(
-                hit_files,
-                item["channel_str"],
-                ["cuspEmax_ctc_cal", "timestamp", "is_valid_cal"],
-            )
-            if hit_files_data is None:
-                continue
+        hit_files_data = read_channel_events(
+            hit_files,
+            item["channel_str"],
+            ["cuspEmax_ctc_cal", "timestamp", "is_valid_cal"],
+        )
+        if hit_files_data is None:
+            continue
 
-            mask = (
-                hit_files_data.is_valid_cal
-                & (hit_files_data.cuspEmax_ctc_cal > 2600)
-                & (hit_files_data.cuspEmax_ctc_cal < 2630)
-            )
-            timestamps = hit_files_data[mask].timestamp.to_numpy()
-            if timestamps.size == 0:
-                continue
-            timestamps -= timestamps[0]
-            energies = hit_files_data[mask].cuspEmax_ctc_cal.to_numpy()
+        mask = (
+            hit_files_data.is_valid_cal
+            & (hit_files_data.cuspEmax_ctc_cal > 2600)
+            & (hit_files_data.cuspEmax_ctc_cal < 2630)
+        )
+        timestamps = hit_files_data[mask].timestamp.to_numpy()
+        if timestamps.size == 0:
+            continue
+        timestamps -= timestamps[0]
+        energies = hit_files_data[mask].cuspEmax_ctc_cal.to_numpy()
 
-            fep_mean_results[ged], fep_stats[ged] = fep_gain_variation(
-                period,
-                run,
-                pars=pars[ged],
-                chmap=item,
-                timestamps=timestamps,
-                values=energies,
-                output_dir=output_folder,
-                save_pdf=save_pdf,
-                shelf=shelf,
-                render=render,
-            )
+        fep_mean_results[ged], fep_stats[ged] = fep_gain_variation(
+            period,
+            run,
+            pars=pars[ged],
+            chmap=item,
+            timestamps=timestamps,
+            values=energies,
+        )
 
-            # build summary in memory
-            ecal_results = pars[ged]["results"]["ecal"]
-            ecal = monitoring.get_energy_key(
-                ecal_results
-            )  # check for cuspEmax_ctc_runcal or cuspEmax_ctc_cal
-            pk_fits = monitoring.get_energy_key(ecal_results).get("pk_fits", {})
+        # build summary in memory
+        ecal_results = pars[ged]["results"]["ecal"]
+        ecal = monitoring.get_energy_key(
+            ecal_results
+        )  # check for cuspEmax_ctc_runcal or cuspEmax_ctc_cal
+        pk_fits = monitoring.get_energy_key(ecal_results).get("pk_fits", {})
 
-            operations = pars[ged]["pars"]["operations"]
-            operations_ecal = monitoring.get_energy_key(
-                operations
-            )  # check for cuspEmax_ctc_runcal or cuspEmax_ctc_cal
+        operations = pars[ged]["pars"]["operations"]
+        operations_ecal = monitoring.get_energy_key(
+            operations
+        )  # check for cuspEmax_ctc_runcal or cuspEmax_ctc_cal
 
-            # find FEP and low-E peaks (keys digits changed in the past, so let's be generic)
-            fep_peaks = [p for p in pk_fits if 2613 < p < 2616]
-            low_peaks = [p for p in pk_fits if 580 < p < 586]
+        # find FEP and low-E peaks (keys digits changed in the past, so let's be generic)
+        fep_peaks = [p for p in pk_fits if 2613 < p < 2616]
+        low_peaks = [p for p in pk_fits if 580 < p < 586]
 
-            fep_valid = False
-            low_valid = False
-            if fep_peaks:
-                fep_energy = fep_peaks[0]
-                fep_valid = ecal["pk_fits"][fep_energy].get("validity", False)
-            if low_peaks:
-                low_energy = low_peaks[0]
-                low_valid = ecal["pk_fits"][low_energy].get("validity", False)
+        fep_valid = False
+        low_valid = False
+        if fep_peaks:
+            fep_energy = fep_peaks[0]
+            fep_valid = ecal["pk_fits"][fep_energy].get("validity", False)
+        if low_peaks:
+            low_energy = low_peaks[0]
+            low_valid = ecal["pk_fits"][low_energy].get("validity", False)
 
-            # true only if both peaks are valid
-            overall_valid = fep_valid and low_valid
-            utils.update_evaluation_in_memory(
-                output, ged, "cal", "npeak", overall_valid
-            )
+        # true only if both peaks are valid
+        overall_valid = fep_valid and low_valid
+        utils.update_evaluation_in_memory(output, ged, "cal", "npeak", overall_valid)
 
-            fwhm = (ecal.get("eres_linear") or {}).get("Qbb_fwhm_in_kev")
-            fwhm_ok = isinstance(
-                fwhm, (int, float, np.integer, np.floating)
-            ) and not np.isnan(fwhm)
-            utils.update_evaluation_in_memory(output, ged, "cal", "fwhm_ok", fwhm_ok)
+        fwhm = (ecal.get("eres_linear") or {}).get("Qbb_fwhm_in_kev")
+        fwhm_ok = isinstance(
+            fwhm, (int, float, np.integer, np.floating)
+        ) and not np.isnan(fwhm)
+        utils.update_evaluation_in_memory(output, ged, "cal", "fwhm_ok", fwhm_ok)
 
-            # FEP gain stability - independent from fwhm; if we use that value, than put it back in the if statement
-            if fep_mean_results[ged] is not None:
-                # remove nan (gaps) or it will return False
-                arr = np.array(fep_mean_results[ged], dtype=float)
-                stable = bool(np.all(np.abs(arr[~np.isnan(arr)]) <= 2))
-            else:
-                stable = False
-            utils.update_evaluation_in_memory(
-                output, ged, "cal", "FEP_gain_stab", stable
-            )
+        # FEP gain stability - independent from fwhm; if we use that value, than put it back in the if statement
+        if fep_mean_results[ged] is not None:
+            # remove nan (gaps) or it will return False
+            arr = np.array(fep_mean_results[ged], dtype=float)
+            stable = bool(np.all(np.abs(arr[~np.isnan(arr)]) <= 2))
+        else:
+            stable = False
+        utils.update_evaluation_in_memory(output, ged, "cal", "FEP_gain_stab", stable)
 
-            if fwhm_ok:
-                # bsln stability (only if not first run)
-                if not first_run:
-                    # channel might not be present in the previous run, leave it None if so
-                    if ged in prev_pars:
-                        gain = operations_ecal["parameters"]["b"]
-                        prev_gain = monitoring.get_energy_key(
-                            prev_pars[ged]["pars"]["operations"]
-                        )["parameters"]["b"]
-                        gain_dev = abs(gain - prev_gain) / prev_gain * 2039
-                        utils.update_evaluation_in_memory(
-                            output, ged, "cal", "const_stab", gain_dev <= 2
-                        )
-
-            else:
-                if not first_run:
+        if fwhm_ok:
+            # bsln stability (only if not first run)
+            if not first_run:
+                # channel might not be present in the previous run, leave it None if so
+                if ged in prev_pars:
+                    gain = operations_ecal["parameters"]["b"]
+                    prev_gain = monitoring.get_energy_key(
+                        prev_pars[ged]["pars"]["operations"]
+                    )["parameters"]["b"]
+                    gain_dev = abs(gain - prev_gain) / prev_gain * 2039
                     utils.update_evaluation_in_memory(
-                        output, ged, "cal", "const_stab", False
+                        output, ged, "cal", "const_stab", gain_dev <= 2
                     )
+
+        else:
+            if not first_run:
+                utils.update_evaluation_in_memory(
+                    output, ged, "cal", "const_stab", False
+                )
 
     # plot
     monitoring.box_summary_plot(
@@ -1292,17 +1013,101 @@ def check_calibration(
         pars,
         det_info,
         fep_mean_results,
-        None,
         utils.MTG_PLOT_INFO["FEP_variation"],
         output_folder,
         "cal",
-        save_pdf,
     )
 
     write_fep_gain_contract(output_folder, period, run, fep_stats)
 
     with open(usability_map_file, "w") as f:
         yaml.dump(output, f)
+
+
+ESCALE_METRICS = {
+    # metric -> (parameter, peak energy, fixed threshold, error multiplier)
+    "escale_fwhm_FEP": ("fwhms_peaks", 2614.511, None, 3),
+    "escale_fwhm_583": ("fwhms_peaks", 583.191, None, 3),
+    "escale_FEP_pos": ("mus_keV_first_cal_peaks", 2614.511, 0.65375, None),
+    "escale_SEP_residual": ("residuals", 2103.511, 0.65375, None),
+}
+_ESCALE_ERR_FIELD = {"fwhms_peaks": "fwhms_err_peaks"}
+
+
+def evaluate_escale_metrics(
+    det_name: str,
+    det_results: dict,
+    usability: dict,
+    period: str,
+    current_run: str,
+) -> dict:
+    """
+    Evaluate the four energy-scale metrics behind the qcp verdicts.
+
+    Reproduces the numbers the legacy figure computed while drawing: for each
+    metric, the mean over every run where the detector is usable ("on"), a
+    band of either a fixed width or a multiple of the mean fit error around
+    it, and whether the current run's value falls inside. The band magnitudes
+    are stashed via ``issues.record_detail`` for the issue records.
+
+    Parameters
+    ----------
+    det_name : str
+        Detector under evaluation.
+    det_results : dict
+        This detector's :func:`get_partitions_params` entry.
+    usability : dict
+        period-run -> 'on'/'ac'/'off' for this detector.
+    period, current_run : str
+        Run being evaluated (``<period>-<current_run>`` is the target key).
+
+    Returns
+    -------
+    verdicts: dict
+        metric -> True (in band) / False (outside) / None (not evaluable).
+    """
+    all_keys = sorted(usability.keys())
+    target = f"{period}-{current_run}"
+    on_mask = np.array([usability.get(k) == "on" for k in all_keys])
+    verdicts = {}
+    for metric, (parameter, peak, fixed_thr, err_thr) in ESCALE_METRICS.items():
+        entry = det_results.get(parameter, {}).get(peak, {})
+        vals = np.array([float(entry.get(k, np.nan)) for k in all_keys])
+        err_field = _ESCALE_ERR_FIELD.get(parameter)
+        errs = None
+        if err_field is not None:
+            err_entry = det_results.get(err_field, {}).get(peak, {})
+            errs = np.array([float(err_entry.get(k, np.nan)) for k in all_keys])
+
+        verdicts[metric] = None
+        valid = ~np.isnan(vals)
+        good = valid & on_mask
+        if not good.any() or target not in all_keys:
+            continue
+        mean = np.nanmean(vals[good])
+        if fixed_thr is not None:
+            lower, upper = mean - fixed_thr, mean + fixed_thr
+        elif errs is not None:
+            mean_err = np.nanmean(errs[good])
+            lower, upper = mean - err_thr * mean_err, mean + err_thr * mean_err
+        else:
+            continue
+        val = vals[all_keys.index(target)]
+        ok = bool(lower <= val <= upper)  # NaN target counts as out of band
+        verdicts[metric] = ok
+        if not ok:
+            utils.issues.record_detail(
+                period,
+                current_run,
+                "cal",
+                det_name,
+                metric,
+                observed=float(val),
+                threshold=[float(lower), float(upper)],
+                unit="keV",
+                reference=float(mean),
+            )
+    return verdicts
 
 
 def write_escale_summary(
@@ -1429,8 +1234,6 @@ def check_calibration_lac_ssc(
     first_run: bool,
     det_info: dict,
     data_type="cal",
-    save_pdf=False,
-    render: bool = True,
 ):
     """
     Check calibration stability for a given run and update monitoring summary YAML file in special LAC or SSC data.
@@ -1451,8 +1254,6 @@ def check_calibration_lac_ssc(
         Flag indicating whether this is the first run of the period.
     det_info : dict
         Dictionary containing detector metadata.
-    save_pdf : bool
-        True if you want to save pdf files too; default: False.
     """
     detectors = det_info["detectors"]
     usability_map_file = os.path.join(
@@ -1474,13 +1275,7 @@ def check_calibration_lac_ssc(
     pars = utils.read_json_or_yaml(files[0])
 
     # find nearest previous run
-    shelve_path = os.path.join(
-        output_folder,
-        period,
-        run,
-        f"mtg/l200-{period}-{run}-{data_type}-monitoring",
-    )
-    os.makedirs(os.path.dirname(shelve_path), exist_ok=True)
+    os.makedirs(os.path.join(output_folder, period, run, "mtg"), exist_ok=True)
     utils.logger.debug("...inspecting FEP, calib peaks, stability in calibrations")
 
     # load ssc/lac data
@@ -1497,91 +1292,84 @@ def check_calibration_lac_ssc(
 
     available_channels = set(lh5.ls(hit_files[0], ""))
 
-    with monitoring.open_shelf(shelve_path) as shelf:
-        for ged, item in detectors.items():
-            if not item["processable"]:
-                continue
+    for ged, item in detectors.items():
+        if not item["processable"]:
+            continue
 
-            # avoid cases where the detector is not present in the output files
-            if item["channel_str"] not in available_channels:
-                continue
+        # avoid cases where the detector is not present in the output files
+        if item["channel_str"] not in available_channels:
+            continue
 
-            hit_files_data = read_channel_events(
-                hit_files,
-                item["channel_str"],
-                ["cuspEmax_ctc_cal", "timestamp", "is_valid_cal"],
-            )
-            if hit_files_data is None:
-                continue
+        hit_files_data = read_channel_events(
+            hit_files,
+            item["channel_str"],
+            ["cuspEmax_ctc_cal", "timestamp", "is_valid_cal"],
+        )
+        if hit_files_data is None:
+            continue
 
-            mask = (
-                hit_files_data.is_valid_cal
-                & (hit_files_data.cuspEmax_ctc_cal > 2600)
-                & (hit_files_data.cuspEmax_ctc_cal < 2630)
-            )
-            timestamps = hit_files_data[mask].timestamp.to_numpy()
-            if timestamps.size == 0:
-                continue
-            timestamps -= timestamps[0]
-            energies = hit_files_data[mask].cuspEmax_ctc_cal.to_numpy()
+        mask = (
+            hit_files_data.is_valid_cal
+            & (hit_files_data.cuspEmax_ctc_cal > 2600)
+            & (hit_files_data.cuspEmax_ctc_cal < 2630)
+        )
+        timestamps = hit_files_data[mask].timestamp.to_numpy()
+        if timestamps.size == 0:
+            continue
+        timestamps -= timestamps[0]
+        energies = hit_files_data[mask].cuspEmax_ctc_cal.to_numpy()
 
-            fep_mean_results[ged], fep_stats[ged] = fep_gain_variation(
-                period,
-                run,
-                pars=pars[ged],
-                chmap=item,
-                timestamps=timestamps,
-                values=energies,
-                output_dir=output_folder,
-                save_pdf=save_pdf,
-                shelf=shelf,
-                render=render,
-            )
+        fep_mean_results[ged], fep_stats[ged] = fep_gain_variation(
+            period,
+            run,
+            pars=pars[ged],
+            chmap=item,
+            timestamps=timestamps,
+            values=energies,
+        )
 
-            # build summary in memory
-            ecal_results = pars[ged]["results"]["ecal"]
-            ecal = monitoring.get_energy_key(
-                ecal_results
-            )  # check for cuspEmax_ctc_runcal or cuspEmax_ctc_cal
-            pk_fits = monitoring.get_energy_key(ecal_results).get("pk_fits", {})
+        # build summary in memory
+        ecal_results = pars[ged]["results"]["ecal"]
+        ecal = monitoring.get_energy_key(
+            ecal_results
+        )  # check for cuspEmax_ctc_runcal or cuspEmax_ctc_cal
+        pk_fits = monitoring.get_energy_key(ecal_results).get("pk_fits", {})
 
-            # find FEP and low-E peaks (keys digits changed in the past, so let's be generic)
-            fep_peaks = [p for p in pk_fits if 2613 < p < 2616]
-            low_peaks = [p for p in pk_fits if 580 < p < 586]
+        # find FEP and low-E peaks (keys digits changed in the past, so let's be generic)
+        fep_peaks = [p for p in pk_fits if 2613 < p < 2616]
+        low_peaks = [p for p in pk_fits if 580 < p < 586]
 
-            fep_valid = False
-            low_valid = False
-            if fep_peaks:
-                fep_energy = fep_peaks[0]
-                fep_valid = ecal["pk_fits"][fep_energy].get("validity", False)
-            if low_peaks:
-                low_energy = low_peaks[0]
-                low_valid = ecal["pk_fits"][low_energy].get("validity", False)
+        fep_valid = False
+        low_valid = False
+        if fep_peaks:
+            fep_energy = fep_peaks[0]
+            fep_valid = ecal["pk_fits"][fep_energy].get("validity", False)
+        if low_peaks:
+            low_energy = low_peaks[0]
+            low_valid = ecal["pk_fits"][low_energy].get("validity", False)
 
-            # true only if both peaks are valid
-            overall_valid = fep_valid and low_valid
-            utils.update_evaluation_in_memory(
-                output, ged, data_type, "npeak", overall_valid
-            )
+        # true only if both peaks are valid
+        overall_valid = fep_valid and low_valid
+        utils.update_evaluation_in_memory(
+            output, ged, data_type, "npeak", overall_valid
+        )
 
-            fwhm = (ecal.get("eres_linear") or {}).get("Qbb_fwhm_in_kev")
-            fwhm_ok = isinstance(
-                fwhm, (int, float, np.integer, np.floating)
-            ) and not np.isnan(fwhm)
-            utils.update_evaluation_in_memory(
-                output, ged, data_type, "fwhm_ok", fwhm_ok
-            )
+        fwhm = (ecal.get("eres_linear") or {}).get("Qbb_fwhm_in_kev")
+        fwhm_ok = isinstance(
+            fwhm, (int, float, np.integer, np.floating)
+        ) and not np.isnan(fwhm)
+        utils.update_evaluation_in_memory(output, ged, data_type, "fwhm_ok", fwhm_ok)
 
-            # FEP gain stability - independent from fwhm; if we use that value, than put it back in the if statement
-            if fep_mean_results[ged] is not None:
-                # remove nan (gaps) or it will return False
-                arr = np.array(fep_mean_results[ged], dtype=float)
-                stable = bool(np.all(np.abs(arr[~np.isnan(arr)]) <= 2))
-            else:
-                stable = False
-            utils.update_evaluation_in_memory(
-                output, ged, data_type, "FEP_gain_stab", stable
-            )
+        # FEP gain stability - independent from fwhm; if we use that value, than put it back in the if statement
+        if fep_mean_results[ged] is not None:
+            # remove nan (gaps) or it will return False
+            arr = np.array(fep_mean_results[ged], dtype=float)
+            stable = bool(np.all(np.abs(arr[~np.isnan(arr)]) <= 2))
+        else:
+            stable = False
+        utils.update_evaluation_in_memory(
+            output, ged, data_type, "FEP_gain_stab", stable
+        )
 
     write_fep_gain_contract(output_folder, period, run, fep_stats, data_type=data_type)
 
@@ -1592,11 +1380,9 @@ def check_calibration_lac_ssc(
         pars,
         det_info,
         fep_mean_results,
-        None,
         utils.MTG_PLOT_INFO["FEP_variation"],
         output_folder,
         data_type,
-        save_pdf,
     )
 
     with open(usability_map_file, "w") as f:

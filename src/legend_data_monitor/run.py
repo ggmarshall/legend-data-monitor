@@ -291,14 +291,6 @@ def add_auto_run_parser(subparsers):
         help="True if you want to save pdf files too; default: False",
     )
     parser_auto_run.add_argument(
-        "--write-shelves",
-        dest="write_shelves",
-        default="on",
-        choices=["on", "off"],
-        help="Write the legacy pickled-figure shelve files consumed by the old "
-        "dashboard ('off' keeps only the contract data). Default: on.",
-    )
-    parser_auto_run.add_argument(
         "--plots",
         default="on",
         choices=["on", "off"],
@@ -344,7 +336,6 @@ def auto_run_cli(args):
         data_type,
         prod_root=args.prod_root,
         render_plots=args.plots == "on",
-        write_shelves=args.write_shelves == "on",
     )
 
 

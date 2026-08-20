@@ -10,6 +10,10 @@ import yaml
 from . import calibration, core, errors, logs, monitoring, repack, tasks, utils
 from .contract import build as contract_build
 from .contract import reader as contract_reader
+from .plots import calib as calib_plots
+from .plots import qc as qc_plots_mod
+from .plots import stability as stability_plots
+from .plots import summary as summary_plots_mod
 from .plots import timeseries as contract_plots
 
 
@@ -30,7 +34,6 @@ def auto_run(
     data_type,
     prod_root=None,
     render_plots=True,
-    write_shelves=True,
 ):
     """Inspect LEGEND HDF5 (LH5) processed data (and Slow Control data from lngs-login cluster) for a specific period and run (if specified; otherwise the latest being processed are used) and save plots and summary files.
 
@@ -42,8 +45,6 @@ def auto_run(
     ``prod_root`` overrides the cluster-mapped production root (useful for
     local/mock trees); by default the root is derived from ``cluster``.
     """
-    monitoring.set_write_shelves(write_shelves)
-
     if prod_root is not None:
         auto_dir = prod_root
     else:
@@ -319,6 +320,7 @@ def auto_run(
             partition=partition,
             escale_val=escale_val,
             save_pdf=save_pdf,
+            render=render_plots,
         )
 
     def task_qc_plots(logger=None):
@@ -335,8 +337,8 @@ def auto_run(
             start_key=start_key,
             period=period,
             current_run=run,
-            last_cycle=last_cycle,
             save_pdf=save_pdf,
+            render=render_plots,
         )
 
     task_list = [tasks.Task("check_calibration", task_check_calibration, period, run)]
@@ -441,6 +443,31 @@ def render_run_plots(
                 detectors=list(group["name"]),
                 logger=logger,
             )
+
+    # the full monitoring figure set, from the period contract file(s)
+    output_folder = os.path.join(files_folder, "generated/plt/hit", data_type)
+    common = dict(
+        detector_map=detector_map,
+        data_type=data_type,
+        save_pdf=True,
+        logger=logger,
+    )
+    saved += qc_plots_mod.plot_qc_rate_series(output_folder, period, run, **common)
+    saved += qc_plots_mod.plot_qc_average(output_folder, period, run, **common)
+    saved += qc_plots_mod.plot_classifier_distributions(
+        output_folder, period, run, **common
+    )
+    saved += summary_plots_mod.plot_ft_summary(output_folder, period, run, **common)
+    saved += summary_plots_mod.plot_event_rate_qc(output_folder, period, run, **common)
+    for metric in ["TrapemaxCtcCal", "BlStd", "Baseline", "Trapemax"]:
+        saved += summary_plots_mod.plot_detector_summary(
+            output_folder, period, run, metric=metric, **common
+        )
+    saved += stability_plots.plot_stability_series(output_folder, period, run, **common)
+    cal_common = dict(detector_map=detector_map, save_pdf=True, logger=logger)
+    saved += stability_plots.plot_fep_gain(output_folder, period, run, **cal_common)
+    saved += calib_plots.plot_psd_stability(output_folder, period, run, **cal_common)
+    saved += calib_plots.plot_escale_panels(output_folder, period, run, **cal_common)
     return saved
 
 
@@ -463,6 +490,24 @@ def _qcp_file_is_populated(filepath: str) -> bool:
     return False
 
 
+def _detector_map_frame(det_info: dict):
+    """name/rawid/string/position frame for the plots/ renderers."""
+    import pandas as pd
+
+    return pd.DataFrame(
+        [
+            {
+                "name": name,
+                "rawid": info.get("daq_rawid"),
+                "string": info.get("string"),
+                "position": info.get("position"),
+                "processable": info.get("processable"),
+            }
+            for name, info in det_info["detectors"].items()
+        ]
+    )
+
+
 def summary_plots(
     auto_dir_path: str,
     phy_mtg_data: str,
@@ -477,8 +522,8 @@ def summary_plots(
     partition: bool = False,
     escale_val: float = 2039.0,
     save_pdf: bool = False,
-    zoom: bool = False,
     quadratic: bool = False,
+    render: bool = True,
 ):
     """
     Run function for creating summary plots.
@@ -511,17 +556,17 @@ def summary_plots(
         Energy scale at which evaluating the gain differences; default: 2039 keV (76Ge Qbb).
     save_pdf : bool
         True if you want to save pdf files too; default: False.
-    zoom : bool
-        True to zoom over y axis; default: False.
     quadratic : bool
         True if you want to plot the quadratic resolution too; default: False.
+    render : bool
+        Draw the figures from the contract after the data pass; default: True.
     """
     det_info = utils.build_detector_info(
         os.path.join(auto_dir_path, "inputs"), start_key=start_key
     )
 
-    # stability plots
-    results = monitoring.plot_time_series(
+    # stability series (data pass; figures come from the contract below)
+    results = monitoring.collect_stability_series(
         auto_dir_path,
         phy_mtg_data,
         output_folder,
@@ -530,13 +575,10 @@ def summary_plots(
         runs,
         current_run,
         det_info,
-        save_pdf,
         escale_val,
         last_checked,
-        last_cycle,
         partition,
         quadratic,
-        zoom,
     )
 
     # load proper calibration (eg for lac/ssc/rdc data or back-dated calibs)
@@ -585,11 +627,9 @@ def summary_plots(
             pars_dict,
             det_info,
             results[k],
-            last_cycle,
             utils.MTG_PLOT_INFO[k],
             output_folder,
             data_type,
-            save_pdf,
             run_to_apply=run_to_apply,
         )
 
@@ -606,7 +646,7 @@ def summary_plots(
     # FT failure rate plots
     if data_type not in ["ssc", "lac", "rdc"]:
 
-        # qc classifier plots
+        # qc classifier fractions + FT/event-rate/dead-time data
         monitoring.qc_distributions(
             auto_dir_path,
             phy_mtg_data,
@@ -614,9 +654,7 @@ def summary_plots(
             start_key,
             period,
             current_run,
-            last_cycle,
             det_info,
-            save_pdf,
         )
 
         monitoring.qc_and_evt_summary_plots(
@@ -626,10 +664,29 @@ def summary_plots(
             start_key,
             period,
             current_run,
-            last_cycle,
             det_info,
-            save_pdf,
         )
+
+    if render:
+        detector_map = _detector_map_frame(det_info)
+        common = dict(detector_map=detector_map, data_type=data_type, save_pdf=save_pdf)
+        stability_plots.plot_stability_series(
+            output_folder, period, current_run, quadratic=quadratic, **common
+        )
+        for k in results.keys():
+            summary_plots_mod.plot_detector_summary(
+                output_folder, period, current_run, metric=k, **common
+            )
+        if data_type not in ["ssc", "lac", "rdc"]:
+            qc_plots_mod.plot_classifier_distributions(
+                output_folder, period, current_run, **common
+            )
+            summary_plots_mod.plot_ft_summary(
+                output_folder, period, current_run, **common
+            )
+            summary_plots_mod.plot_event_rate_qc(
+                output_folder, period, current_run, last_cycle=last_cycle, **common
+            )
 
 
 def check_calib(
@@ -708,8 +765,6 @@ def check_calib(
             current_run,
             first_run,
             det_info,
-            save_pdf,
-            render=render,
         )
         calibration.check_psd(
             auto_dir_path,
@@ -719,18 +774,30 @@ def check_calib(
             period,
             current_run,
             det_info,
-            save_pdf,
         )
 
-        calibration.check_escale(
+        detector_status = calibration.check_escale(
             auto_dir_path,
             cal_path,
             output_folder,
             period,
             current_run,
             det_info,
-            save_pdf,
         )
+
+        if render:
+            detector_map = _detector_map_frame(det_info)
+            common = dict(detector_map=detector_map, save_pdf=save_pdf)
+            stability_plots.plot_fep_gain(output_folder, period, current_run, **common)
+            calib_plots.plot_psd_stability(output_folder, period, current_run, **common)
+            calib_plots.plot_escale_panels(
+                output_folder,
+                period,
+                current_run,
+                detector_status=detector_status,
+                exclude_period=["p05", "p10", "p11", "p13", "p15", "p17"],
+                **common,
+            )
     else:
         calibration.check_calibration_lac_ssc(
             auto_dir_path,
@@ -740,10 +807,17 @@ def check_calib(
             run_to_apply,
             first_run,
             det_info,
-            save_pdf=save_pdf,
             data_type=data_type,
-            render=render,
         )
+        if render:
+            stability_plots.plot_fep_gain(
+                output_folder,
+                period,
+                current_run,
+                detector_map=_detector_map_frame(det_info),
+                data_type=data_type,
+                save_pdf=save_pdf,
+            )
 
         utils.logger.debug(
             f"...we do not inspect PSD time stability in {data_type} data"
@@ -766,8 +840,8 @@ def qc_avg_series(
     start_key: str,
     period: str,
     current_run: str,
-    last_cycle: str,
     save_pdf: bool = False,
+    render: bool = True,
 ):
     """
     Plot quality cuts average values across the array and trends in time.
@@ -784,30 +858,33 @@ def qc_avg_series(
         Period to inspect.
     current_run : str
         Run under inspection.
-    last_cycle : str
-        Last cycle of the inspect list; format: YYYYMMDDThhmmssZ.
     save_pdf : bool
         True if you want to save pdf files too; default: False.
+    render : bool
+        Draw the figures from the contract after the data pass; default: True.
     """
     det_info = utils.build_detector_info(
         os.path.join(auto_dir_path, "inputs/"), start_key=start_key
     )
 
-    monitoring.qc_average(
-        auto_dir_path,
-        output_folder,
-        det_info,
-        period,
-        current_run,
-        last_cycle,
-        save_pdf,
-    )
+    monitoring.qc_average(auto_dir_path, output_folder, det_info, period, current_run)
     monitoring.qc_time_series(
-        auto_dir_path,
-        output_folder,
-        det_info,
-        period,
-        current_run,
-        last_cycle,
-        save_pdf,
+        auto_dir_path, output_folder, det_info, period, current_run
     )
+
+    if render:
+        detector_map = _detector_map_frame(det_info)
+        qc_plots_mod.plot_qc_average(
+            output_folder,
+            period,
+            current_run,
+            detector_map=detector_map,
+            save_pdf=save_pdf,
+        )
+        qc_plots_mod.plot_qc_rate_series(
+            output_folder,
+            period,
+            current_run,
+            detector_map=detector_map,
+            save_pdf=save_pdf,
+        )

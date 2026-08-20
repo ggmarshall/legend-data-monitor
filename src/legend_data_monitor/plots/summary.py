@@ -44,7 +44,7 @@ def _read_key(path, key, logger):
 
 
 def _read_detector_map(output_folder, period, run, data_type, logger):
-    """The run contract's detector map (name, rawid, string, position)."""
+    """Read the run contract's detector map (name, rawid, string, position)."""
     path = os.path.join(
         output_folder,
         period,
@@ -96,7 +96,9 @@ def _ft_string_figure(
         secax.set_ylabel("FT failure fraction (%)")
 
     ax.set_ylabel("Normalized FT failure rate (mHz/kg)")
-    ax.legend(ncol=2, fontsize="small", loc="upper left", title=_legend_title(last_cycle))
+    ax.legend(
+        ncol=2, fontsize="small", loc="upper left", title=_legend_title(last_cycle)
+    )
     ax.grid(False)
     fig.suptitle(f"{period} - {run} - string {string}")
     fig.tight_layout()
@@ -104,7 +106,7 @@ def _ft_string_figure(
 
 
 def _ft_all_strings_figure(period, run, per_string, last_cycle):
-    """Combined FT failure figure: one steps-mid line per string."""
+    """Build the combined FT failure figure: one steps-mid line per string."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -118,7 +120,9 @@ def _ft_all_strings_figure(period, run, per_string, last_cycle):
         )
     ax.set_ylabel("Normalized FT failure rate (mHz/kg)")
     ax.set_title(f"{period} - {run} - All strings")
-    ax.legend(ncol=2, fontsize="small", loc="upper left", title=_legend_title(last_cycle))
+    ax.legend(
+        ncol=2, fontsize="small", loc="upper left", title=_legend_title(last_cycle)
+    )
     ax.grid(False)
     fig.tight_layout()
     return fig

@@ -61,7 +61,7 @@ def _plain(value):
 
 
 def _string_position(detector_map, cal, detector):
-    """(string, position) from the detector map, falling back to cal_points."""
+    """Return (string, position) from the detector map or cal_points."""
     for frame, name_col in ((detector_map, "name"), (cal, "detector")):
         if frame is None or name_col not in frame:
             continue
@@ -72,7 +72,7 @@ def _string_position(detector_map, cal, detector):
 
 
 def _detector_cal(cal, detector):
-    """This detector's cal_points rows, run_start-ordered; None when absent."""
+    """Return the detector's cal_points rows, run_start-ordered; None when absent."""
     if cal is None or not len(cal):
         return None
     rows = cal[cal["detector"] == detector].sort_values("run_start")
@@ -121,8 +121,10 @@ def _draw_cal_points(ax, cal, quadratic):
         Naive run-start timestamps, used for the x limits.
     """
     t0 = [_naive_ts(t) for t in cal["run_start"]]
-    res = cal["res"].astype(float).values
-    res_quad = cal["res_quad"].astype(float).values
+    # frames written before the res columns existed still draw, minus the bands
+    nan = np.full(len(cal), np.nan)
+    res = cal["res"].astype(float).values if "res" in cal else nan
+    res_quad = cal["res_quad"].astype(float).values if "res_quad" in cal else nan
     shifted = [t - pd.Timedelta(hours=5) for t in t0]  # legacy -5 h marker shift
     ax.plot(shifted, cal["fep_diff"].astype(float).values, "kx", label="FEP gain")
     ax.plot(
@@ -134,6 +136,8 @@ def _draw_cal_points(ax, cal, quadratic):
     for ti in t0:
         ax.axvline(ti, color="dimgrey", ls="--")
     for i in range(len(t0)):
+        if np.isnan(res[i]):
+            continue
         t_end = t0[i] + pd.Timedelta(days=7) if i == len(t0) - 1 else t0[i + 1]
         ax.plot([t0[i], t_end], [res[i] / 2, res[i] / 2], "b-")
         ax.plot([t0[i], t_end], [-res[i] / 2, -res[i] / 2], "b-")
@@ -151,12 +155,12 @@ def _draw_cal_points(ax, cal, quadratic):
                 linestyle="-",
             )
         if not np.isnan(res[i]):
-            ax.text(t0[i], res[i] / 2 * 1.1, "{:.2f}".format(res[i]), color="b")
+            ax.text(t0[i], res[i] / 2 * 1.1, f"{res[i]:.2f}", color="b")
         if quadratic and not np.isnan(res_quad[i]):
             ax.text(
                 t0[i],
                 res_quad[i] / 2 * 1.5,
-                "{:.2f}".format(res_quad[i]),
+                f"{res_quad[i]:.2f}",
                 color="dodgerblue",
             )
     return t0
@@ -284,18 +288,14 @@ def _build_param_figure(
         x, vals - sig, vals + sig, color="k", alpha=0.2, label=r"±1$\sigma$"
     )
 
-    threshold = (
-        [-res0 / 2, res0 / 2] if "Trapemax" in parameter else info["limits"]
-    )
+    threshold = [-res0 / 2, res0 / 2] if "Trapemax" in parameter else info["limits"]
     if t0 is not None:
         span = [t0, t0 + pd.Timedelta(days=7)]
         if parameter == "TrapemaxCtcCal":
             ax.plot(span, [res0 / 2, res0 / 2], color=info["colors"][1], ls="-")
             ax.plot(span, [-res0 / 2, -res0 / 2], color=info["colors"][1], ls="-")
             if not np.isnan(res0):
-                ax.text(
-                    t0, res0 / 2 * 1.1, "{:.2f}".format(res0), color=info["colors"][1]
-                )
+                ax.text(t0, res0 / 2 * 1.1, f"{res0:.2f}", color=info["colors"][1])
             ax.plot([0, 1], [0, 1], color=info["colors"][1], label=QBB_LIN_LABEL)
         else:
             if threshold[1] is not None:
@@ -520,7 +520,8 @@ def plot_stability_series(
             if det_cal is not None:
                 # cal_points has no run column: the drawn run is the latest point
                 last = det_cal.iloc[-1]
-                t0, res0 = _naive_ts(last["run_start"]), float(last["res"])
+                t0 = _naive_ts(last["run_start"])
+                res0 = float(last["res"]) if "res" in det_cal else float("nan")
             pul_trace = None
             if (
                 parameter == "TrapemaxCtcCal"

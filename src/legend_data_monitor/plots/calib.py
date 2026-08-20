@@ -30,13 +30,13 @@ def _load_detector_map(output_folder, period, run, data_type, logger):
     )
     try:
         return pd.read_hdf(path, "detector_map")
-    except (FileNotFoundError, KeyError, OSError):
+    except (KeyError, OSError):
         _warn(logger, f"no detector_map readable at {path}")
         return None
 
 
 def _det_location(detector_map, det_name):
-    """(string, position) of a detector, or None when not mapped."""
+    """Return (string, position) of a detector, or None when not mapped."""
     rows = detector_map[detector_map["name"] == det_name]
     if rows.empty:
         return None
@@ -191,7 +191,7 @@ def _plot_metric(
 
 
 def _plot_usability(ax, all_keys, usability):
-    """The legacy Usability panel: status steps plus the shared legend."""
+    """Draw the legacy Usability panel: status steps plus the shared legend."""
     import matplotlib.pyplot as plt
 
     x = np.arange(len(all_keys))
@@ -201,7 +201,10 @@ def _plot_usability(ax, all_keys, usability):
         for i, prefix in enumerate(_period_prefixes(all_keys)):
             mask = np.array([str(k).startswith(prefix) for k in all_keys])
             vals0 = np.array(
-                [mapping.get(usability.get(k), np.nan) for k in np.array(all_keys)[mask]]
+                [
+                    mapping.get(usability.get(k), np.nan)
+                    for k in np.array(all_keys)[mask]
+                ]
             )
             x0 = x[mask][~np.isnan(vals0)]
             vals0 = vals0[~np.isnan(vals0)]
@@ -309,10 +312,20 @@ def _build_escale_figure(
         **common,
     )
     _plot_metric(
-        axs[2][0], all_keys, _series(frame, "bl_std"), title="bl std", units="ADC", **common
+        axs[2][0],
+        all_keys,
+        _series(frame, "bl_std"),
+        title="bl std",
+        units="ADC",
+        **common,
     )
     _plot_metric(
-        axs[2][1], all_keys, _series(frame, "bl_max"), title="bl max", units="ADC", **common
+        axs[2][1],
+        all_keys,
+        _series(frame, "bl_max"),
+        title="bl max",
+        units="ADC",
+        **common,
     )
     _plot_metric(
         axs[2][2],
@@ -432,7 +445,7 @@ def plot_escale_panels(
     path = period_contract_path(output_folder, period, data_type)
     try:
         frame = pd.read_hdf(path, f"escale/{run}")
-    except (FileNotFoundError, KeyError, OSError):
+    except (KeyError, OSError):
         _warn(logger, f"no escale/{run} frame in {path}; skipping escale figures")
         return []
     if frame.empty:
@@ -652,7 +665,9 @@ def plot_psd_stability(
         return []
     prefix = f"/psd_stability/{run}/"
     with pd.HDFStore(path, mode="r") as store:
-        detectors = sorted(k[len(prefix) :] for k in store.keys() if k.startswith(prefix))
+        detectors = sorted(
+            k[len(prefix) :] for k in store.keys() if k.startswith(prefix)
+        )
     if not detectors:
         _warn(logger, f"no psd_stability/{run} keys in {path}; skipping PSD figures")
         return []

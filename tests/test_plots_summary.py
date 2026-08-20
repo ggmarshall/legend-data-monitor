@@ -214,4 +214,6 @@ def test_detector_summary_figure_content():
 def test_missing_keys_return_empty(tmp_path):
     assert summary.plot_event_rate_qc(str(tmp_path), PERIOD, RUN) == []
     assert summary.plot_ft_summary(str(tmp_path), PERIOD, RUN) == []
-    assert summary.plot_detector_summary(str(tmp_path), PERIOD, RUN, "pulser_stab") == []
+    assert (
+        summary.plot_detector_summary(str(tmp_path), PERIOD, RUN, "pulser_stab") == []
+    )

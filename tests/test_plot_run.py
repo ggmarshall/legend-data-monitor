@@ -36,9 +36,9 @@ def _contract_run(tmp_path, period="p22", run="r012", data_type="phy"):
         "detector_map",
         pd.DataFrame(
             [
-                {"name": DETS[0], "string": 1},
-                {"name": DETS[1], "string": 1},
-                {"name": DETS[2], "string": 2},
+                {"name": DETS[0], "rawid": 1084803, "string": 1, "position": 1},
+                {"name": DETS[1], "rawid": 1084804, "string": 1, "position": 2},
+                {"name": DETS[2], "rawid": 1084805, "string": 2, "position": 1},
             ]
         ),
     )

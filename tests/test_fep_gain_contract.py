@@ -89,35 +89,19 @@ def test_write_fep_gain_contract_skips_empty_input(tmp_path):
     )
 
 
-def test_render_false_returns_the_same_numbers_without_drawing(tmp_path):
-    """Rendering is optional; the returned drift must not depend on it."""
+def test_fep_gain_variation_is_data_only(tmp_path):
+    """The generator computes; drawing lives in plots.stability now."""
     import matplotlib.pyplot as plt
 
     timestamps, values = _series(n_bins=3, per_bin=10, drift_per_bin=0.5)
     chmap = {"name": "V01234A", "string": 1, "position": 2}
-    kwargs = dict(
-        pars={},
-        chmap=chmap,
-        timestamps=timestamps,
-        values=values,
-        output_dir=str(tmp_path),
-        save_pdf=False,
-        shelf=None,
-    )
     before = len(plt.get_fignums())
-    means_norender, computed_norender = calibration.fep_gain_variation(
-        "p22", "r012", render=False, **kwargs
+    means, computed = calibration.fep_gain_variation(
+        "p22", "r012", pars={}, chmap=chmap, timestamps=timestamps, values=values
     )
     assert len(plt.get_fignums()) == before  # nothing was drawn
-
-    means_render, computed_render = calibration.fep_gain_variation(
-        "p22", "r012", render=True, **kwargs
-    )
-    assert means_render.tolist() == pytest.approx(means_norender.tolist())
-    assert computed_render["stats"]["mean"].tolist() == pytest.approx(
-        computed_norender["stats"]["mean"].tolist()
-    )
-    plt.close("all")
+    assert means is not None
+    assert computed["stats"]["mean"].notna().any()
 
 
 # -------------------------------------------------------------------------

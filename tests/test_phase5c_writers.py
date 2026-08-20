@@ -9,9 +9,7 @@ from legend_data_monitor.processing import binning
 
 
 def test_event_rate_qc_roundtrip(tmp_path):
-    times = pd.to_datetime(
-        np.linspace(1.7e9, 1.7e9 + 6 * 3600, 720), unit="s"
-    )
+    times = pd.to_datetime(np.linspace(1.7e9, 1.7e9 + 6 * 3600, 720), unit="s")
     key = monitoring.write_event_rate_qc(
         str(tmp_path),
         "p22",
@@ -73,7 +71,11 @@ def test_psd_stability_roundtrip(tmp_path):
         [1e-4, 1e-4, np.nan],
         [0.002, 0.002, np.nan],
         [1e-5, 1e-5, np.nan],
-        {"status": True, "slow_shift_fail_runs": ["r001"], "sudden_shift_fail_runs": []},
+        {
+            "status": True,
+            "slow_shift_fail_runs": ["r001"],
+            "sudden_shift_fail_runs": [],
+        },
     )
     assert key == "psd_stability/r002/V01234A"
     path = monitoring.period_contract_path(str(tmp_path), "p22", "cal")
@@ -98,9 +100,7 @@ def test_writers_route_by_data_type(tmp_path):
 
 
 def test_fill_distribution_2d_per_detector_counts():
-    frame = pd.DataFrame(
-        {"A": [0.0, 1.0, 20.0, np.nan], "B": [-20.0, 0.5, 0.5, 0.5]}
-    )
+    frame = pd.DataFrame({"A": [0.0, 1.0, 20.0, np.nan], "B": [-20.0, 0.5, 0.5, 0.5]})
     hist = binning.fill_distribution_2d(frame, n_bins=10, value_range=(-15.0, 15.0))
     assert [str(c) for c in hist.axes[1]] == ["A", "B"]
     counts = hist.view(flow=True)
@@ -121,12 +121,12 @@ def test_build_writes_classifier_dist2d(tmp_path):
     v1 = str(run_dir / "l200-p22-r000-phy-geds.hdf")
     idx = pd.date_range("2026-01-01", periods=500, freq="min")
     rng = np.random.default_rng(0)
-    pd.DataFrame(rng.normal(0, 3, (500, 2)), index=idx, columns=[1084803, 1084804]).to_hdf(
-        v1, key="All_IsValidTailRmsClassifier", mode="a"
-    )
-    pd.DataFrame(rng.normal(0, 1, (500, 2)), index=idx, columns=[1084803, 1084804]).to_hdf(
-        v1, key="IsPulser_Baseline", mode="a"
-    )
+    pd.DataFrame(
+        rng.normal(0, 3, (500, 2)), index=idx, columns=[1084803, 1084804]
+    ).to_hdf(v1, key="All_IsValidTailRmsClassifier", mode="a")
+    pd.DataFrame(
+        rng.normal(0, 1, (500, 2)), index=idx, columns=[1084803, 1084804]
+    ).to_hdf(v1, key="IsPulser_Baseline", mode="a")
     build.build_contract_files(str(tmp_path), "p22", "r000")
     v2 = str(run_dir / "l200-p22-r000-phy-geds-schema2.hdf")
     with h5py.File(v2, "r") as f:

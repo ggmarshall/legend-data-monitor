@@ -120,9 +120,7 @@ def _save_figure(fig, pdf_dir, stem, save_pdf, png_dir, logger, **savefig_kwargs
 # -------------------------------------------------------------------------
 # 1. QC rate vs time, one figure per (flag, string)
 # -------------------------------------------------------------------------
-def _rate_series_figure(
-    period, run, flag, string, dets, rates, avg_rates, color_cycle
-):
+def _rate_series_figure(period, run, flag, string, dets, rates, avg_rates, color_cycle):
     """Build one per-string QC rate-vs-time figure (legacy qc_time_series).
 
     Parameters
@@ -570,7 +568,7 @@ def plot_classifier_distributions(
             (r.classifier, r.detector, r.event_type): float(r.percent_in_range)
             for r in frac.itertuples()
         }
-    except (KeyError, OSError, FileNotFoundError):
+    except (KeyError, OSError):
         logger.warning(
             "no qc_classifier_frac/%s in %s; legend percentages will be nan",
             run,

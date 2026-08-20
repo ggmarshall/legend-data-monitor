@@ -6,13 +6,13 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-import numpy as np
-import pandas as pd
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 
-from legend_data_monitor import monitoring
-from legend_data_monitor.contract import writer
-from legend_data_monitor.plots import qc
-from legend_data_monitor.processing import binning
+from legend_data_monitor import monitoring  # noqa: E402
+from legend_data_monitor.contract import writer  # noqa: E402
+from legend_data_monitor.plots import qc  # noqa: E402
+from legend_data_monitor.processing import binning  # noqa: E402
 
 PERIOD, RUN = "p22", "r000"
 
@@ -114,9 +114,7 @@ def test_classifier_distributions_from_dist2d(tmp_path):
     run_dir.mkdir(parents=True)
     contract = str(run_dir / f"l200-{PERIOD}-{RUN}-phy-geds-schema2.hdf")
     rng = np.random.default_rng(0)
-    frame = pd.DataFrame(
-        rng.normal(0, 3, (500, 2)), columns=["V01234A", "V05678B"]
-    )
+    frame = pd.DataFrame(rng.normal(0, 3, (500, 2)), columns=["V01234A", "V05678B"])
     par = "IsValidTailRmsClassifier"
     for flag in ["All", "IsPulser"]:
         writer.write_distribution_2d(
@@ -143,9 +141,7 @@ def test_classifier_distributions_from_dist2d(tmp_path):
     paths = qc.plot_classifier_distributions(
         str(tmp_path), PERIOD, RUN, detector_map=_detector_map()
     )
-    assert [os.path.basename(p) for p in paths] == [
-        f"{PERIOD}_{RUN}_string1_{par}.pdf"
-    ]
+    assert [os.path.basename(p) for p in paths] == [f"{PERIOD}_{RUN}_string1_{par}.pdf"]
 
 
 def test_missing_inputs_are_not_fatal(tmp_path):
