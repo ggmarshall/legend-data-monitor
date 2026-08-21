@@ -133,7 +133,7 @@ def _transport_keys(keys: list, subsystem: str) -> list:
             k
             for k in keys
             if k.startswith(("IsPhysics_", "All_"))
-            and not k.endswith((*_METADATA_SUFFIX, "_mean"))
+            and not k.endswith((_METADATA_SUFFIX, "_mean"))
         ]
     return [k for k in keys if "Classifier" in k]
 

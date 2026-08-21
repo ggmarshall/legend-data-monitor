@@ -1,38 +1,78 @@
 ## General code guidelines
 
-Code changes that are short and targeted are generally prefered.
-Any code comments inline should fit on the line next to the code they refer to.
-Avoid where possible long code comments, the code itself should be readable 
-and understandable in a way that these are not necessary.
-Docstrings should follow numpy convention e.g.
+Prefer short, targeted changes. Inline comments should fit on the line next to
+the code they refer to; if code needs a long comment, make the code clearer instead.
+Docstrings follow numpy convention:
 
-def func(a,b);
+```python
+def func(a, b):
     """
-    this func does something
+    One-line summary.
 
-    params
-    ------
+    Parameters
+    ----------
     a : str
-        a is a string
-    b: float
-        b is a float
+        description
+    b : float
+        description
 
-    returns
+    Returns
     -------
-    var: int
-        this func returns an int
+    int
+        description
+    """
+```
+
+## Dev commands
+
+- Venv: uv-managed `.venv` (Python 3.11), package installed editable.
+  Recreate: `uv venv --python 3.11 .venv && uv pip install -p .venv/bin/python -e ".[test]"`
+- Tests: `.venv/bin/python -m pytest -q` (single test: `pytest tests/<dir>/<file>.py::<test> -q`)
+- pytest is strict: warnings are errors, `--strict-markers --strict-config`. A new
+  FutureWarning from pandas/numpy fails the suite. Use `1h` not `1H` offset aliases.
+- 4 pre-existing failures in `tests/monitoring/` are known baseline — see
+  `tests/baseline/BASELINE.md`; don't treat them as new breakage.
+- Behavior changes must keep the golden snapshot bit-identical:
+  `.venv/bin/python tests/baseline/snapshot.py <out> tests/baseline/golden_p19_r001.json --check`
+- Lint is black + isort + flake8 (no ruff), numpy docstrings enforced, `print()`
+  banned in `src/` (use the logger). mypy is manual-stage only.
+
+## Architecture invariants
+
+- Only `contract/writer.py` writes monitoring output files; plots never write HDF.
+- `legend_data_monitor/__init__.py` imports lazily — a bare import must stay ~0.01 s
+  with no matplotlib. Don't add eager imports there.
+- Library code raises typed exceptions from `errors.py`, never `sys.exit`;
+  `run.py` is the sole exit-code owner (0 ok, 1 task failure, 2 config/env error).
+- Root `issues.py` / `tasks.py` are re-export shims — edit `contract/issues.py` /
+  `orchestration/tasks.py` instead.
+- Before touching `monitoring.py`, `calibration.py`, or `contract/`, read
+  `REFACTOR_STATUS.md` (running record of the refactor + remaining backlog).
+
+## Gotchas
+
+- `.gitignore` blanket-ignores `*.yaml`/`*.json` repo-wide (exceptions only for
+  packaged settings/examples). New YAML/JSON elsewhere needs `git add -f` —
+  check `git status --ignored` before assuming a file is committed.
+- Cluster prodenv roots are hardcoded in `automatic_run.py`; use `--prod_root`
+  for local/mock trees. Full e2e coverage (and any cal-tier data) exists only
+  on-cluster.
 
 ## Github guidelines
 
-Always run pre-commit before committing with pre-commit run -a
-Try to keep commit messages short and to the point, likewise with pr body and comments.
-Avoid too many commits, keep the git history as clean as possible. 
+Always run `pre-commit run -a` before committing. Keep commit messages, PR bodies,
+and history short and clean; avoid too many commits. Push to the `ggmarshall` fork
+first; upstream is `legend-exp/legend-data-monitor`. Substantial AI contributions
+must be disclosed in the PR (see `AI_POLICY.md`).
 
-## repo specific
+## Repo specific
 
-This code is designed to be used by a monitoring dashboard (https://github.com/legend-exp/legend-monitor-dashboard) run in panel, outputs 
-should therefore be as lightweight as possible to ensure this dashboard is fast.
-It also runs on a shared machine so resource usage should be as low as possible.
-Keep these in mind when making changes.
-The code also interacts with auto-giorgio (https://github.com/ggmarshall/auto-giorgio), a bot using claude to diagnose issues, warnings or flags for detector 
-instabilities should be clear to make it easy for this bot to diagnose.
+Outputs feed the Panel dashboard (legend-exp/legend-monitor-dashboard), which reads
+contract v2 with plain h5py/json — keep outputs lightweight so it stays fast. Runs
+on a shared machine and single runs are hours long / multi-GB: memory or disk
+regressions are bugs.
+
+The log/issue formats consumed by auto-giorgio (ggmarshall/auto-giorgio) are a
+frozen contract — see `docs/auto-giorgio-integration.md` before changing log lines,
+`ERROR ... END ERROR` / `ISSUE ... END ISSUE` blocks, or the issues JSONL schema.
+Warnings and flags for detector instabilities should stay clear and machine-parseable.
