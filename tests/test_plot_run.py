@@ -77,3 +77,46 @@ def test_render_run_plots_emits_saved_plot_lines(tmp_path, caplog):
 def test_render_run_plots_without_a_contract_file_is_not_fatal(tmp_path):
     # a run processed before contract v2, or a wrong period/run
     assert automatic_run.render_run_plots(str(tmp_path), "p22", "r999") == []
+
+
+def test_render_run_plots_spms_only_groups_by_barrel_and_position(tmp_path):
+    run_dir = tmp_path / "generated/plt/hit/phy/p22/r012"
+    run_dir.mkdir(parents=True)
+    path = str(run_dir / "l200-p22-r012-phy-spms-schema2.hdf")
+    dets = ["S060", "S061"]
+    rng = np.random.default_rng(2)
+    n, t0 = 2000, 1_700_000_000.0
+    binned = binning.fill_time_series(
+        rng.uniform(t0, t0 + 3600, n),
+        rng.choice(dets, n),
+        rng.integers(0, 2, n).astype(float),
+        dets,
+        t0,
+        t0 + 3600,
+    )
+    writer.write_binned_series(path, "All", "HasAnyNoise", binned)
+    writer.write_detector_map(
+        path,
+        {
+            "S060": {
+                "daq_rawid": 1064000,
+                "barrel": "IB",
+                "fiber": "IB015016",
+                "position": "top",
+                "processable": True,
+                "usability": "on",
+            },
+            "S061": {
+                "daq_rawid": 1064001,
+                "barrel": "IB",
+                "fiber": "IB015016",
+                "position": "bottom",
+                "processable": True,
+                "usability": "on",
+            },
+        },
+        subsystem="spms",
+    )
+    saved = automatic_run.render_run_plots(str(tmp_path), "p22", "r012")
+    names = sorted(p.rsplit("/", 1)[-1] for p in saved)
+    assert names == ["All_HasAnyNoise_IB_bottom.png", "All_HasAnyNoise_IB_top.png"]

@@ -67,5 +67,10 @@ def test_spms_production_keys(tmp_path):
 
 
 def test_spms_production_keys_absent_inputs(tmp_path):
-    assert monitoring.write_spms_production_keys(str(tmp_path), "p22", "r012", str(tmp_path)) == []
+    assert (
+        monitoring.write_spms_production_keys(
+            str(tmp_path), "p22", "r012", str(tmp_path)
+        )
+        == []
+    )
     assert not os.path.exists(monitoring.period_contract_path(str(tmp_path), "p22"))

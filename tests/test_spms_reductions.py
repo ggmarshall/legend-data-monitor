@@ -40,16 +40,26 @@ def test_expand_fields_adds_sources_and_keeps_plain():
 def test_loader_reduces_ragged_fields(tmp_path):
     path = _write_spms_file(tmp_path / "spms.lh5")
     frame = phy_files.load_channel_frame(
-        [path], "hit", ["ch1057600"], ["n_pulses", "pe_sum", "pe_max", "first_trigger_ns"]
+        [path],
+        "hit",
+        ["ch1057600"],
+        ["n_pulses", "pe_sum", "pe_max", "first_trigger_ns"],
     )
     # only scalars leave the loader: the ragged sources are dropped
     assert set(frame.columns) == {
-        "timestamp", "channel", "n_pulses", "pe_sum", "pe_max", "first_trigger_ns"
+        "timestamp",
+        "channel",
+        "n_pulses",
+        "pe_sum",
+        "pe_max",
+        "first_trigger_ns",
     }
     assert list(frame["n_pulses"]) == [2, 0, 2, 0]
     np.testing.assert_allclose(frame["pe_sum"], [3.5, 0.0, 7.0, 0.0])
     np.testing.assert_array_equal(frame["pe_max"], [2.5, np.nan, 4.0, np.nan])
-    np.testing.assert_array_equal(frame["first_trigger_ns"], [500.0, np.nan, 900.0, np.nan])
+    np.testing.assert_array_equal(
+        frame["first_trigger_ns"], [500.0, np.nan, 900.0, np.nan]
+    )
     assert all(frame[c].dtype == np.float32 for c in ["pe_sum", "pe_max", "n_pulses"])
     assert frame["channel"].dtype == np.int32
 

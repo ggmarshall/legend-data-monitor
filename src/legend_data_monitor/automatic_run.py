@@ -433,6 +433,14 @@ HEADLINE_PNG_KEYS = [
     ("IsPulser", "BlStd", "ADC"),
 ]
 
+# same for the spms contract, grouped by barrel and position instead of string
+SPMS_HEADLINE_PNG_KEYS = [
+    ("IsBsln", "WfMode_var", "%"),
+    ("IsBsln", "CurrFwhm", "ADC"),
+    ("IsBsln", "NPulses", "per window"),
+    ("All", "HasAnyNoise", "fraction"),
+]
+
 
 def render_run_plots(
     files_folder: str,
@@ -462,27 +470,53 @@ def render_run_plots(
     logger = logger if logger is not None else utils.logger
     run_dir = os.path.join(files_folder, "generated/plt/hit", data_type, period, run)
     v2_file = os.path.join(run_dir, f"l200-{period}-{run}-{data_type}-geds-schema2.hdf")
-    if not os.path.isfile(v2_file):
+    spms_file = v2_file.replace("-geds-schema2.hdf", "-spms-schema2.hdf")
+    if not os.path.isfile(v2_file) and not os.path.isfile(spms_file):
         utils.logger.warning("no contract-v2 file to render PNGs from: %s", v2_file)
         return []
-    detector_map = pd.read_hdf(v2_file, "detector_map")
     saved = []
-    for flag, param, unit in HEADLINE_PNG_KEYS:
-        try:
-            binned = contract_reader.read_binned_series(v2_file, flag, param, "10min")
-        except KeyError:
-            utils.logger.debug("...no %s_%s in %s, skip PNG", flag, param, v2_file)
-            continue
-        for string, group in detector_map.groupby("string"):
-            saved += contract_plots.plot_binned_series(
-                binned,
-                run_dir,
-                f"{flag}_{param}_st{int(string):02d}",
-                title=f"{flag} {param} — string {string} ({period} {run}, 10min bins)",
-                unit=unit,
-                detectors=list(group["name"]),
-                logger=logger,
-            )
+    detector_map = None
+    if os.path.isfile(v2_file):
+        detector_map = pd.read_hdf(v2_file, "detector_map")
+        for flag, param, unit in HEADLINE_PNG_KEYS:
+            try:
+                binned = contract_reader.read_binned_series(
+                    v2_file, flag, param, "10min"
+                )
+            except KeyError:
+                utils.logger.debug("...no %s_%s in %s, skip PNG", flag, param, v2_file)
+                continue
+            for string, group in detector_map.groupby("string"):
+                saved += contract_plots.plot_binned_series(
+                    binned,
+                    run_dir,
+                    f"{flag}_{param}_st{int(string):02d}",
+                    title=f"{flag} {param} — string {string} ({period} {run}, 10min bins)",
+                    unit=unit,
+                    detectors=list(group["name"]),
+                    logger=logger,
+                )
+
+    if os.path.isfile(spms_file):
+        spms_map = pd.read_hdf(spms_file, "detector_map")
+        for flag, param, unit in SPMS_HEADLINE_PNG_KEYS:
+            try:
+                binned = contract_reader.read_binned_series(
+                    spms_file, flag, param, "10min"
+                )
+            except KeyError:
+                continue
+            for (barrel, position), group in spms_map.groupby(["barrel", "position"]):
+                saved += contract_plots.plot_binned_series(
+                    binned,
+                    run_dir,
+                    f"{flag}_{param}_{barrel}_{position}",
+                    title=f"{flag} {param} — {barrel} {position} ({period} {run}, 10min bins)",
+                    unit=unit,
+                    detectors=list(group["name"]),
+                    logger=logger,
+                    envelope=param != "HasAnyNoise",
+                )
 
     # the full monitoring figure set, from the period contract file(s)
     output_folder = os.path.join(files_folder, "generated/plt/hit", data_type)
