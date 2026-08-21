@@ -322,10 +322,32 @@ pass, channel health only:
   (6.5 % all run, `alert`); everything else passes. Headline PNGs per
   barrel×position; issue records carry the spms `data_ref` and those plots.
 
-Still to do: p22 spms backfill (needs a writer slot on the p22 tree) and the
-v1 per-event strip; then phase S2 (LAr veto performance from the evt tier).
-The dashboard SiPM page needs a rewrite against the spms contract (dashboard
-session).
+- **v1 strip** generalised (`repack.strip_transport_pivots(subsystem=)`):
+  spms drops every `IsPhysics_*`/`All_*` per-event pivot (keeps `_mean`),
+  geds keeps the classifier rule; `strip_transport` and `repack
+  --strip-classifiers` cover both files.
+
+## Phase S2 — LAr veto performance (2026-08-21)
+
+New task `lar_summary` (after `qc_plots`, ~20 s/run): `monitoring.
+read_lar_events` reduces the evt tier per file (per-event scalars + a dense
+event x SiPM "had a trigger-coincident pulse" matrix from
+`spms/is_trig_coin_pulse`), `write_lar_summary` publishes `lar_veto/<run>`
+(hourly `n_phys`, `veto_frac` of physics geds events, `accidental_frac` of
+forced triggers = the veto's random-coincidence dead time, medians of
+`energy_sum`/`multiplicity`, `first_t0_frac`, `classifier_median`) and
+`lar_occupancy/<run>` (hourly x SiPM participation) to the period file, plus
+`hist/IsPhysics_Lar{EnergySum,Multiplicity,Classifier}_dist` in the spms
+contract. p22/r012: veto 0.73–0.85, accidentals 0.02–0.11, occupancy
+0.12–0.22 per SiPM. Checks (`mtg-plot-settings.yaml` `lar_*` entries, 6 h
+rolling): `lar_veto_frac` 0.6–0.95 and `lar_accidental_frac` < 0.2 under the
+pseudo-detector `LAr`, `spms_occupancy` > 0.02 per SiPM; graded by
+`check_spms_thresholds`, issue `data_ref` into the period file.
+
+Still to do: p22 spms backfill is running (sequential, ~75 min/run, then the
+strip); the dashboard SiPM/LAr pages need a rewrite against the spms contract
+and the `lar_*` keys (dashboard session). The LLAMA page has no producer
+anywhere (out of scope).
 
 ## Remaining
 

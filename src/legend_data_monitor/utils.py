@@ -1300,6 +1300,9 @@ ISSUE_METRIC_PERIOD_KEYS = {
     "discharge_rate": ("phy", "qc_rate_series/IsDischarge/{run}"),
     "saturated_rate": ("phy", "qc_rate_series/IsSaturated/{run}"),
     "tot_discharge_dead_time": ("phy", "dead_time/{run}"),
+    "lar_veto_frac": ("phy", "lar_veto/{run}"),
+    "lar_accidental_frac": ("phy", "lar_veto/{run}"),
+    "spms_occupancy": ("phy", "lar_occupancy/{run}"),
 }
 
 

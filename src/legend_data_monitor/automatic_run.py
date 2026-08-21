@@ -266,6 +266,26 @@ def auto_run(
             data_type=data_type,
         )
 
+    def task_lar_summary(logger=None):
+        """Summarise the LAr veto performance of the run from the evt tier (~20 s)."""
+        evt_dir = os.path.join(
+            auto_dir_path, "generated/tier/evt", data_type, period, run
+        )
+        files = sorted(glob.glob(os.path.join(evt_dir, "*.lh5")))
+        if not files:
+            utils.logger.info("...no evt files for %s/%s; no LAr summary", period, run)
+            return
+        names = {
+            info["daq_rawid"]: name
+            for name, info in utils.build_spms_info(
+                os.path.join(auto_dir_path, "inputs")
+            ).items()
+        }
+        written = monitoring.write_lar_summary(
+            phy_folder, period, run, files, rawid_to_name=names, data_type=data_type
+        )
+        utils.logger.info("...LAr summary keys written: %s", written)
+
     def task_strip_transport(logger=None):
         """Drop the v1 classifier pivots of the period's finished runs.
 
@@ -402,6 +422,7 @@ def auto_run(
             tasks.Task("phy_summary_plots", task_phy_summary_plots, period, run)
         )
         task_list.append(tasks.Task("qc_plots", task_qc_plots, period, run))
+        task_list.append(tasks.Task("lar_summary", task_lar_summary, period, run))
         task_list.append(tasks.Task("phy_issues", task_phy_issues, period, run))
         task_list.append(
             tasks.Task("strip_transport", task_strip_transport, period, run)

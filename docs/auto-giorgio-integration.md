@@ -62,7 +62,10 @@ Per unattended invocation (`legend-data-monitor auto_run`):
   points at) and carry excursions (hourly). Their `detector` is a SiPM name
   (`S0NN`); `string`/`position` are absent (the schema keeps them as
   germanium integers) — use the contract's `/detector_map` for barrel, fiber
-  and top/bottom. `plots[]` attach the barrel-side figures.
+  and top/bottom. `plots[]` attach the barrel-side figures. LAr veto
+  metrics: `spms_occupancy` per SiPM, and `lar_veto_frac`/`lar_accidental_frac`
+  under the pseudo-detector `LAr` (no rawid); `data_ref` points at the period
+  keys `lar_occupancy/<run>` / `lar_veto/<run>`.
 - Exit codes: 0 all tasks ok; 1 ≥1 task failed (others still ran); 2
   config/environment error.
 
