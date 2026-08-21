@@ -257,8 +257,8 @@ def add_auto_run_parser(subparsers):
     )
     parser_auto_run.add_argument(
         "--port",
-        default=8282,
-        help="Port necessary to retrieve the Slow Control database (default: 8282).",
+        default=5678,
+        help="Local port the ugnet-proxy tunnel forwards to the Slow Control database (default: 5678).",
     )
     parser_auto_run.add_argument(
         "--pswd_email",

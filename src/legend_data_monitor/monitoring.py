@@ -658,6 +658,46 @@ def write_event_rate_qc(
     return contract_writer.write_frame(path, f"event_rate_qc/{run}", frame)
 
 
+def write_slow_control(
+    output_folder: str,
+    period: str,
+    run: str,
+    parameter: str,
+    frame: pd.DataFrame,
+    data_type: str = "phy",
+) -> str | None:
+    """
+    Publish one slow-control parameter for a run to the period contract file.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring output root (the folder containing ``<period>/``).
+    period, run : str
+        Run the readings were queried for.
+    parameter : str
+        SC parameter as named in ``SC-params.yaml`` (``DaqLeft-Temp1``); the
+        key uses underscores, matching the dashboard's selector vocabulary.
+    frame : pandas.DataFrame
+        ``SlowControl.data``: ``tstamp``, ``value``, ``unit``, ``lower_lim``,
+        ``upper_lim`` columns.
+    data_type : str
+        Data type key of the period contract file.
+
+    Returns
+    -------
+    key: str or None
+        The key written, or None when the frame is empty.
+    """
+    if frame is None or frame.empty:
+        return None
+    series = frame.set_index(pd.DatetimeIndex(frame["tstamp"], name="datetime"))
+    series = series[["value", "unit", "lower_lim", "upper_lim"]].sort_index()
+    path = period_contract_path(output_folder, period, data_type)
+    key = f"slow_control/{parameter.replace('-', '_')}/{run}"
+    return contract_writer.write_frame(path, key, series)
+
+
 def write_qc_rates(
     output_folder: str,
     period: str,

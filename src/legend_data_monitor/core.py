@@ -4,7 +4,15 @@ import subprocess
 import yaml
 from dbetto import TextDB
 
-from . import analysis_data, errors, plotting, slow_control, subsystem, utils
+from . import (
+    analysis_data,
+    errors,
+    monitoring,
+    plotting,
+    slow_control,
+    subsystem,
+    utils,
+)
 
 
 def retrieve_exposure(
@@ -136,17 +144,16 @@ def retrieve_scdb(config: str, port: int, pswd: str):
     # check validity of scdb settings
     utils.check_scdb_settings(config)
 
-    # -------------------------------------------------------------------------
-    # Define PDF file basename
-    # -------------------------------------------------------------------------
-
-    # Format: l200-{period}-{run}-{data_type}; one pdf/log/shelve file for each subsystem
-    out_path = utils.get_output_path(config) + "-slow_control.hdf"
+    # the period contract file lives beside the run directories
+    run_dir = os.path.dirname(utils.get_output_path(config))
+    output_folder = os.path.dirname(os.path.dirname(run_dir))
+    period = config["dataset"]["period"]
+    run = f"r{int(config['dataset']['runs']):03d}"
 
     # -------------------------------------------------------------------------
     # Load and save data
     # -------------------------------------------------------------------------
-    for idx, param in enumerate(config["slow_control"]["parameters"]):
+    for param in config["slow_control"]["parameters"]:
         utils.logger.info(
             "\33[34m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\33[0m"
         )
@@ -172,19 +179,9 @@ def retrieve_scdb(config: str, port: int, pswd: str):
             )
             continue
 
-        # remove the slow control hdf file if
-        #   1) it already exists
-        #   2) we specified "overwrite" as saving option
-        #   3) it is the first parameter we want to save (idx==0)
-        if os.path.exists(out_path) and config["saving"] == "overwrite" and idx == 0:
-            os.remove(out_path)
-
-        # save data to hdf file
-        sc_analysis.data.copy().to_hdf(
-            out_path,
-            key=param.replace("-", "_"),
-            mode="a",
-            **utils.HDF_COMPRESSION,
+        # one key per (parameter, run): rewriting it replaces the previous pass
+        monitoring.write_slow_control(
+            output_folder, period, run, param, sc_analysis.data
         )
 
 
