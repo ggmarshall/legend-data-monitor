@@ -23,13 +23,29 @@ def _spms_contract(root):
     d = rng.choice(DETS, n)
     # S061 is noisy 10 % of the time, S060 0.2 %
     noisy = rng.uniform(size=n) < np.where(d == "S061", 0.10, 0.002)
-    binned = binning.fill_time_series(t, d, noisy.astype(float), DETS, t0, t0 + 24 * 3600)
+    binned = binning.fill_time_series(
+        t, d, noisy.astype(float), DETS, t0, t0 + 24 * 3600
+    )
     writer.write_binned_series(path, "All", "HasAnyNoise", binned)
     writer.write_detector_map(
         path,
         {
-            "S060": {"daq_rawid": 1064000, "barrel": "IB", "fiber": "IB015016", "position": "top", "processable": True, "usability": "on"},
-            "S061": {"daq_rawid": 1064001, "barrel": "IB", "fiber": "IB015016", "position": "bottom", "processable": True, "usability": "on"},
+            "S060": {
+                "daq_rawid": 1064000,
+                "barrel": "IB",
+                "fiber": "IB015016",
+                "position": "top",
+                "processable": True,
+                "usability": "on",
+            },
+            "S061": {
+                "daq_rawid": 1064001,
+                "barrel": "IB",
+                "fiber": "IB015016",
+                "position": "bottom",
+                "processable": True,
+                "usability": "on",
+            },
         },
         subsystem="spms",
     )
@@ -54,7 +70,9 @@ def test_spms_thresholds_grade_and_emit_issue(tmp_path):
         "S061": {"daq_rawid": 1064001, "barrel": "IB", "position": "bottom"},
         "S060": {"daq_rawid": 1064000, "barrel": "IB", "position": "top"},
     }
-    utils.check_cal_phy_thresholds(str(root), PERIOD, RUN, "phy", {}, detector_info=spms_info)
+    utils.check_cal_phy_thresholds(
+        str(root), PERIOD, RUN, "phy", {}, detector_info=spms_info
+    )
     path = issues.issues_file_path(str(tmp_path), PERIOD, RUN, "phy")
     with open(path) as f:
         records = [json.loads(line) for line in f.read().splitlines()]
@@ -64,7 +82,9 @@ def test_spms_thresholds_grade_and_emit_issue(tmp_path):
     assert rec.get("string") is None and rec.get("position") is None
     assert rec["data_ref"]["key"] == "hist/All_HasAnyNoise"
     assert rec["data_ref"]["file"].endswith("-spms-schema2.hdf")
-    assert [p.rsplit("/", 1)[-1] for p in rec["plots"]] == ["All_HasAnyNoise_IB_bottom.png"]
+    assert [p.rsplit("/", 1)[-1] for p in rec["plots"]] == [
+        "All_HasAnyNoise_IB_bottom.png"
+    ]
     assert rec["excursion"]["recovered"] is False
 
 

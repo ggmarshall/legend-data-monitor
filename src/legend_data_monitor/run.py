@@ -424,12 +424,13 @@ def repack_cli(args):
             before += sizes[0]
             after += sizes[1]
         if args.strip_classifiers:
-            stripped_before, stripped_after = repack.strip_classifier_pivots(
-                args.output_folder, args.p, run, args.data_type
-            )
-            # repack_run already counted this file at its pre-strip size;
-            # fold in only the further reduction the strip achieved
-            after -= stripped_before - stripped_after
+            for subsystem in ("geds", "spms"):
+                stripped_before, stripped_after = repack.strip_transport_pivots(
+                    args.output_folder, args.p, run, args.data_type, subsystem=subsystem
+                )
+                # repack_run already counted this file at its pre-strip size;
+                # fold in only the further reduction the strip achieved
+                after -= stripped_before - stripped_after
     if not before:
         legend_data_monitor.utils.logger.warning("no v1 files found to repack")
         return 1

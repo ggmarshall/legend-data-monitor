@@ -124,6 +124,20 @@ def repack_run(
     return results
 
 
+#: v1 keys that exist only as transport to the contract build, per subsystem:
+#: geds QC classifiers; for spms every per-event pivot of physics/all events
+#: (forced-trigger keys are sparse and stay)
+def _transport_keys(keys: list, subsystem: str) -> list:
+    if subsystem == "spms":
+        return [
+            k
+            for k in keys
+            if k.startswith(("IsPhysics_", "All_"))
+            and not k.endswith((*_METADATA_SUFFIX, "_mean"))
+        ]
+    return [k for k in keys if "Classifier" in k]
+
+
 def strip_classifier_pivots(
     generated_path: str,
     period: str,
@@ -131,12 +145,28 @@ def strip_classifier_pivots(
     data_type: str = "phy",
     experiment: str = "l200",
 ) -> tuple:
-    """
-    Drop the QC classifier pivots from a run's v1 file.
+    """Geds flavour of :func:`strip_transport_pivots` (kept for the CLI and callers)."""
+    return strip_transport_pivots(
+        generated_path, period, run, data_type, experiment, subsystem="geds"
+    )
 
-    They are event-level continuous values that barely compress (1.6 GB of a
-    2.2 GB run file) and exist in the v1 file only as the transport to the
-    contract build, which bins them into ``hist/<key>/<cadence>``. Refuses to
+
+def strip_transport_pivots(
+    generated_path: str,
+    period: str,
+    run: str,
+    data_type: str = "phy",
+    experiment: str = "l200",
+    subsystem: str = "geds",
+) -> tuple:
+    """
+    Drop the transport-only pivots from a run's v1 file of one subsystem.
+
+    They are event-level values that barely compress (geds: the QC classifier
+    pivots, 1.6 GB of a 2.2 GB run file; spms: the per-event ``IsPhysics``/
+    ``All`` pivots, 376 of 414 MB) and exist in the v1 file only as the
+    transport to the contract build, which bins them into
+    ``hist/<key>/<cadence>``. Refuses to
     touch the file unless the contract carries every key about to be removed,
     so a v1 file is never stripped of the only copy of its data. QC flag
     (boolean) keys, ``_mean``/``_var``/``_info`` keys and parameters survive.
@@ -151,6 +181,8 @@ def strip_classifier_pivots(
         Data type (``phy``, ...).
     experiment : str
         Experiment prefix in file names.
+    subsystem : str
+        ``geds`` or ``spms``.
 
     Returns
     -------
@@ -158,7 +190,7 @@ def strip_classifier_pivots(
         ``(before, after)`` file size in bytes; equal when nothing was done.
     """
     run_dir = os.path.join(generated_path, "generated/plt/hit", data_type, period, run)
-    stem = f"{experiment}-{period}-{run}-{data_type}-geds"
+    stem = f"{experiment}-{period}-{run}-{data_type}-{subsystem}"
     v1_file = os.path.join(run_dir, f"{stem}.hdf")
     contract_file = os.path.join(run_dir, f"{stem}-schema2.hdf")
     if not os.path.exists(v1_file):
@@ -168,9 +200,9 @@ def strip_classifier_pivots(
     before = os.path.getsize(v1_file)
     with pd.HDFStore(v1_file, "r") as store:
         keys = [key.lstrip("/") for key in store.keys()]
-    doomed = [key for key in keys if "Classifier" in key]
+    doomed = _transport_keys(keys, subsystem)
     if not doomed:
-        utils.logger.info("%s carries no classifier pivots", os.path.basename(v1_file))
+        utils.logger.info("%s carries no transport pivots", os.path.basename(v1_file))
         return before, before
 
     # the guard: every key being removed must already be binned in the contract
@@ -185,7 +217,7 @@ def strip_classifier_pivots(
         missing = [key for key in doomed if f"hist/{key}/1min" not in f]
     if missing:
         utils.logger.error(
-            "refusing to strip %s: %d classifier key(s) not in the contract (e.g. %s)",
+            "refusing to strip %s: %d key(s) not in the contract (e.g. %s)",
             os.path.basename(v1_file),
             len(missing),
             missing[0],
@@ -207,7 +239,7 @@ def strip_classifier_pivots(
             os.remove(tmp)
         raise
     utils.logger.info(
-        "stripped %d classifier pivot(s) from %s: %.2f -> %.2f GB",
+        "stripped %d transport pivot(s) from %s: %.2f -> %.2f GB",
         len(doomed),
         os.path.basename(v1_file),
         before / 2**30,

@@ -10,6 +10,7 @@ import yaml
 from . import calibration, core, errors, logs, monitoring, repack, tasks, utils
 from .contract import build as contract_build
 from .contract import reader as contract_reader
+from .contract import schema as contract_schema
 from .plots import calib as calib_plots
 from .plots import qc as qc_plots_mod
 from .plots import stability as stability_plots
@@ -280,9 +281,10 @@ def auto_run(
         for done_run in sorted(os.listdir(period_dir)):
             if done_run >= run or not re.fullmatch(r"r\d+", done_run):
                 continue
-            repack.strip_classifier_pivots(
-                files_folder, period, done_run, data_type=data_type
-            )
+            for subsystem in contract_schema.SUBSYSTEMS:
+                repack.strip_transport_pivots(
+                    files_folder, period, done_run, data_type, subsystem=subsystem
+                )
 
     def task_render_plots(logger=None):
         """Draw the run's figures from the contract file.

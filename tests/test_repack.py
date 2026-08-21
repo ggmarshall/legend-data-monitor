@@ -301,3 +301,59 @@ def test_repack_contract_failure_leaves_original_untouched(tmp_path, monkeypatch
 
     with h5py.File(path, "r") as f:
         assert f["hist/IsPulser_Trapemax/1min/storage/values"].dtype == np.float64
+
+
+def test_strip_spms_drops_per_event_pivots_only(tmp_path):
+    from legend_data_monitor.contract import writer
+    from legend_data_monitor.processing import binning
+
+    run_dir = tmp_path / "generated/plt/hit/phy/p22/r000"
+    run_dir.mkdir(parents=True)
+    v1 = str(run_dir / "l200-p22-r000-phy-spms.hdf")
+    rng = np.random.default_rng(6)
+    keys = {
+        "IsBsln_NPulses": True,
+        "IsBsln_NPulses_var": True,
+        "IsPhysics_PeSum": False,
+        "IsPhysics_PeSum_var": False,
+        "IsPhysics_PeSum_mean": True,
+        "All_HasAnyNoise": False,
+        "All_HasAnyNoise_mean": True,
+    }
+    for key in keys:
+        pd.DataFrame(
+            rng.normal(0, 1, (500, 2)).astype("float32"),
+            index=pd.date_range("2026-01-01", periods=500, freq="s"),
+        ).to_hdf(v1, key=key, mode="a", **utils.HDF_COMPRESSION)
+    pd.DataFrame.from_dict({"unit": "a.u."}, orient="index", columns=["Value"]).to_hdf(
+        v1, key="IsPhysics_PeSum_info", mode="a"
+    )
+    contract = str(run_dir / "l200-p22-r000-phy-spms-schema2.hdf")
+    dets = ["S060", "S061"]
+    t0 = 1_700_000_000.0
+    binned = binning.fill_time_series(
+        rng.uniform(t0, t0 + 3600, 300),
+        rng.choice(dets, 300),
+        rng.normal(0, 1, 300),
+        dets,
+        t0,
+        t0 + 3600,
+    )
+    for flag, param in [
+        ("IsPhysics", "PeSum"),
+        ("IsPhysics", "PeSum_var"),
+        ("All", "HasAnyNoise"),
+    ]:
+        writer.write_binned_series(contract, flag, param, binned)
+
+    before, after = repack.strip_transport_pivots(
+        str(tmp_path), "p22", "r000", subsystem="spms"
+    )
+    assert after < before
+    with pd.HDFStore(v1, "r") as store:
+        left = sorted(k.lstrip("/") for k in store.keys())
+    assert left == sorted(
+        [k for k, keep in keys.items() if keep] + ["IsPhysics_PeSum_info"]
+    )
+    # geds flavour on a run without a geds file is a no-op
+    assert repack.strip_classifier_pivots(str(tmp_path), "p22", "r000") == (0, 0)
