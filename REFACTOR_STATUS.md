@@ -277,6 +277,45 @@ fixed ranges clipping the min/max envelope, the dead `IsBsln_<param>` menu
 branch, `_uncamel` not inverting the producer's camel-caser) were handed to
 the dashboard session with file:line references.
 
+## SiPM / LAr monitoring, phase S1 (2026-08-21)
+
+Nothing LAr-related worked end to end before (no spms entries in
+`parameter-tiers.yaml`, so `Subsystem("spms").get_data` raised; the per-barrel
+plot was an unrunnable draft; nothing was ever produced in production). First
+pass, channel health only:
+
+- **Loader reductions** (`processing/spms.py`, `settings/spms-reductions.yaml`):
+  the ragged hit fields become per-event scalars (`n_pulses`, `pe_sum`,
+  `pe_max`, `first_trigger_ns`) inside `load_channel_frame`, per file *before*
+  the concat (pandas concatenates awkward-backed columns in Python: 22 s vs
+  0.3 s for 2 channels x 3 files). Nothing ragged leaves the loader.
+- **Subsystem**: `barrel` column (spms only) in the channel map; `is_spms()`
+  keys on it instead of duck-typing dtypes; `channel_mean` runs for spms
+  (so `_var` keys exist); the pulser01ana aux merge is geds-only.
+- **Config**: `settings/spms-dict.yaml` (wf_mode/curr_fwhm/wf_lower_hwhm/
+  n_pulses in FCbsln = forced triggers, pe_sum/pe_max in phy, has_any_noise in
+  all; 10 min, `per barrel`). `auto_run` merges it with `geds-dict.yaml`.
+  `check_plot_settings` refuses cross-subsystem structures.
+- **Contract flavour**: `build_contract_files(..., subsystem=)` +
+  `build_all_contract_files`; `-spms-schema2.hdf` with a
+  `name/rawid/barrel/fiber/position/processable/usability` detector map,
+  `limits[subsystem]` attrs, manifest merged across subsystem files.
+  `refresh_contract` loops over the subsystem files present; the classifier
+  strip stays geds-only.
+- **Period keys**: `spms_noise/<run>` (hourly `baseline_curr_fwhm` x SiPM from
+  `par_dsp_spms.yaml`) and `spms_calibration/<run>` (the `energy_in_pe` a/m and
+  `is_valid_hit` threshold overrides in force, with their source file — on
+  p22 it is `lar/p19/r005/...`, i.e. the PE calibration is three periods stale).
+- Verified on a 3-key p22/r012 chunk: 58 SiPMs, all 7 families populated,
+  FCbsln `n_pulses` ~0.2 per 100 us window (~2 kHz dark rate), one SiPM at a
+  6 % noisy-waveform fraction against <1 % for the rest; 335 s, 0.75 GB peak.
+
+Still to do in S1: thresholds (`par-settings.yaml` spms limits are all null
+until a full run gives bands) and issue records; `plots/` renderers from the
+spms contract; full-run timing; p22 backfill. Then phase S2 (LAr veto
+performance from the evt tier). The dashboard SiPM page needs a rewrite against
+the spms contract (dashboard session).
+
 ## Remaining
 
 1. ~~**Pickled-figure shelve writers**~~ **DONE (2026-08-20)**, see above. Was:

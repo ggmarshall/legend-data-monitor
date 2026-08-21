@@ -31,7 +31,7 @@ _AUX_RELATION = {
 }
 
 
-def _param_attrs(key: str) -> dict:
+def _param_attrs(key: str, subsystem: str = "geds") -> dict:
     """Best-effort unit/label/limits lookup for a v1 key name."""
     body = key.lstrip("/")
     flag, _, rest = body.partition("_")
@@ -59,7 +59,7 @@ def _param_attrs(key: str) -> dict:
     }
     try:
         keyword = "variation" if is_var else "absolute"
-        attrs["limits"] = info["limits"]["geds"][keyword]
+        attrs["limits"] = info["limits"][subsystem][keyword]
     except (KeyError, TypeError):
         pass
     return {k: v for k, v in attrs.items() if v is not None}
@@ -73,8 +73,9 @@ def build_contract_files(
     data_type: str = "phy",
     experiment: str = "l200",
     keys: list | None = None,
+    subsystem: str = "geds",
 ) -> str | None:
-    """Produce the v2 contract file + manifest for one (period, run).
+    """Produce the v2 contract file + manifest for one (period, run, subsystem).
 
     Parameters
     ----------
@@ -90,11 +91,17 @@ def build_contract_files(
     keys : list, optional
         v1 key bodies (e.g. ``IsPulser_BlMean``) to refresh in place; the rest
         of an existing contract file is kept. Default rebuilds everything.
+    subsystem : str
+        ``geds`` or ``spms``; selects the v1 input, the ``-<subsystem>-schema2``
+        output and the detector-map flavour. The manifest lists every
+        subsystem file built for the run.
 
     Returns the manifest path, or None when the v1 input file is absent.
     """
     run_dir = os.path.join(generated_path, "generated/plt/hit", data_type, period, run)
-    v1_file = os.path.join(run_dir, f"{experiment}-{period}-{run}-{data_type}-geds.hdf")
+    v1_file = os.path.join(
+        run_dir, schema.run_file_name(period, run, data_type, subsystem, experiment)
+    )
     if not os.path.exists(v1_file):
         utils.logger.debug("no v1 monitoring file at %s; skipping v2 build", v1_file)
         return None
@@ -103,11 +110,13 @@ def build_contract_files(
     rename = {}
     detectors = {}
     if metadata_path is not None:
-        det_info = utils.build_detector_info(metadata_path)
-        detectors = det_info["detectors"]
+        if subsystem == "spms":
+            detectors = utils.build_spms_info(metadata_path)
+        else:
+            detectors = utils.build_detector_info(metadata_path)["detectors"]
         rename = {info["daq_rawid"]: name for name, info in detectors.items()}
 
-    v2_name = f"{experiment}-{period}-{run}-{data_type}-geds-schema2.hdf"
+    v2_name = f"{experiment}-{period}-{run}-{data_type}-{subsystem}-schema2.hdf"
     v2_file = os.path.join(run_dir, v2_name)
     if keys is None and os.path.exists(v2_file):
         os.remove(v2_file)
@@ -124,7 +133,7 @@ def build_contract_files(
             frame.columns = [rename.get(c, str(c)) for c in frame.columns]
             body = key.lstrip("/")
             flag, _, rest = body.partition("_")
-            attrs = _param_attrs(key)
+            attrs = _param_attrs(key, subsystem)
 
             if key.endswith("_mean"):
                 written_keys.append(writer.write_frame(v2_file, body, frame))
@@ -164,7 +173,7 @@ def build_contract_files(
                 )
 
     if detectors and keys is None:
-        written_keys.append(writer.write_detector_map(v2_file, detectors))
+        written_keys.append(writer.write_detector_map(v2_file, detectors, subsystem))
 
     if keys is not None:
         # rewriting groups in place leaves their old blocks behind; compact, and
@@ -176,16 +185,42 @@ def build_contract_files(
 
     from .._version import version
 
+    files = _manifest_files(run_dir, period, run, experiment)
+    files[v2_name] = {"keys": sorted(written_keys), "cadences": list(schema.CADENCES)}
     manifest_path = writer.write_manifest(
-        run_dir,
-        period,
-        run,
-        {v2_name: {"keys": sorted(written_keys), "cadences": list(schema.CADENCES)}},
-        package_version=version,
-        experiment=experiment,
+        run_dir, period, run, files, package_version=version, experiment=experiment
     )
     utils.logger.info("v2 contract file written: %s", v2_file)
     return manifest_path
+
+
+def build_all_contract_files(generated_path: str, period: str, run: str, **kwargs):
+    """Build the contract file of every subsystem whose v1 file exists."""
+    manifest = None
+    for subsystem in schema.SUBSYSTEMS:
+        manifest = (
+            build_contract_files(
+                generated_path, period, run, subsystem=subsystem, **kwargs
+            )
+            or manifest
+        )
+    return manifest
+
+
+def _manifest_files(run_dir: str, period: str, run: str, experiment: str) -> dict:
+    """File entries of the existing manifest whose contract files are still present."""
+    import json
+
+    path = os.path.join(run_dir, schema.manifest_name(period, run, experiment))
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        files = json.load(f).get("files", {})
+    return {
+        name: entry
+        for name, entry in files.items()
+        if os.path.exists(os.path.join(run_dir, name))
+    }
 
 
 def _keys_in_file(v2_file: str) -> list:

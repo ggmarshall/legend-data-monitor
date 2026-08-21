@@ -133,8 +133,11 @@ def auto_run(
     }
 
     pkg = importlib.resources.files("legend_data_monitor")
-    with open(pkg / "settings" / "geds-dict.yaml") as f:
-        geds_dict = yaml.load(f, Loader=yaml.CLoader)
+    # one plot dictionary per subsystem; each produces its own v1 + contract file
+    subsystems_dict = {}
+    for name in ("geds-dict.yaml", "spms-dict.yaml"):
+        with open(pkg / "settings" / name) as f:
+            subsystems_dict |= yaml.load(f, Loader=yaml.CLoader)
 
     # define geds dict
     my_config = {
@@ -148,7 +151,7 @@ def auto_run(
             "runs": int(run.split("r")[-1]),
         },
         "saving": "append",
-        "subsystems": geds_dict,
+        "subsystems": subsystems_dict,
     }
 
     phy_folder = os.path.join(
@@ -246,11 +249,19 @@ def auto_run(
     def task_build_monitoring_hdf(logger=None):
         files_folder = os.path.join(output_folder, ref_version)
         monitoring.build_new_files(files_folder, period, run, data_type=data_type)
-        contract_build.build_contract_files(
+        contract_build.build_all_contract_files(
             files_folder,
             period,
             run,
             metadata_path=os.path.join(auto_dir_path, "inputs"),
+            data_type=data_type,
+        )
+        monitoring.write_spms_production_keys(
+            phy_folder,
+            period,
+            run,
+            auto_dir_path,
+            start_key=utils.get_start_key(auto_dir_path, data_type, period, run),
             data_type=data_type,
         )
 

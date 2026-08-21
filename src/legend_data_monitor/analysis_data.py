@@ -503,90 +503,68 @@ class AnalysisData:
         """
         Get mean value of each parameter of interest in each channel in the first 10% of the dataset.
 
-        Ignore in case of SiPMs, as each entry is a list of values, not a single value.
+        SiPM parameters are per-event scalars too (ragged fields are reduced at
+        load, see processing/spms.py), so every subsystem takes the same path.
         """
         utils.logger.info("... getting channel mean")
-        # series with index channel, columns of parameters containing mean of each channel;
-        # the mean is performed over the first 10% interval of the full time range specified in the config file
 
-        # get mean (only for non-list parameters; in that case, add a new column with None values):
-        # check if we are looking at SiPMs -> do not get mean because entries are usually lists
-        # ToDo: need to iterate over the parameters (some of them could be lists, others not)
-
-        # congratulations, it's a sipm!
-        if self.is_spms():
-            channels = (self.data["channel"]).unique()
-            # !! need to update for multiple parameter case!
-            channel_mean = pd.DataFrame(
-                {"channel": channels, self.parameters[0]: [None] * len(channels)}
-            )
-            channel_mean = channel_mean.set_index("channel")
-            # !! need to update for multiple parameter case!
+        if self.saving is None or self.saving == "overwrite":
+            # get the dataframe for timestamps below 10% of data present in the selected time window
+            self_data_time_cut = cut_dataframe(self.data)
+            # create a column with the mean of the cut dataframe (cut in the time window of interest)
+            channel_mean = self_data_time_cut.groupby("channel").mean(
+                numeric_only=True
+            )[self.parameters]
+            del self_data_time_cut
+            # concatenate column with mean values
             self.data = concat_channel_mean(self, channel_mean)
 
-        # otherwise, it's either an aux or geds
-        else:
-            if self.saving is None or self.saving == "overwrite":
-                # get the dataframe for timestamps below 10% of data present in the selected time window
-                self_data_time_cut = cut_dataframe(self.data)
-                # create a column with the mean of the cut dataframe (cut in the time window of interest)
-                channel_mean = self_data_time_cut.groupby("channel").mean(
-                    numeric_only=True
-                )[self.parameters]
-                del self_data_time_cut
-                # concatenate column with mean values
-                self.data = concat_channel_mean(self, channel_mean)
+        elif self.saving == "append":
+            subsys = self.get_subsys() if self.aux_info is None else self.aux_info
+            # the file does not exist, so we get the mean as usual
+            if not os.path.exists(self.plt_path + "-" + subsys + ".hdf"):
+                self.data = self.add_channel_mean_column()
 
-            elif self.saving == "append":
-                subsys = self.get_subsys() if self.aux_info is None else self.aux_info
-                # the file does not exist, so we get the mean as usual
-                if not os.path.exists(self.plt_path + "-" + subsys + ".hdf"):
-                    self.data = self.add_channel_mean_column()
+            # the file exist: we have to combine previous data with new data, and re-compute the mean over the first 10% of data (that now, are more than before)
+            else:
+                if len(self.parameters) == 1:
+                    param = self.parameters[0]
+                    saved_type = utils.FLAGS_RENAME[self.evt_type]
+                    param_camel = utils.convert_to_camel_case(param, "_")
+                    key_to_load = f"{saved_type}_{param_camel}"
+                    is_key = utils.check_key_existence(
+                        self.plt_path + "-" + subsys + ".hdf", key_to_load
+                    )
+                    if is_key:
+                        old_data = pd.read_hdf(
+                            self.plt_path + "-" + subsys + ".hdf", key=key_to_load
+                        )
+                        channel_mean = get_saved_df_hdf(self, subsys, param, old_data)
+                        self.data = concat_channel_mean(self, channel_mean)
+                    else:
+                        self.data = self.add_channel_mean_column()
 
-                # the file exist: we have to combine previous data with new data, and re-compute the mean over the first 10% of data (that now, are more than before)
-                else:
-                    if len(self.parameters) == 1:
-                        param = self.parameters[0]
+                if len(self.parameters) > 1:
+                    for param in self.parameters:
+                        parameter = param.split("_var")[0] if "_var" in param else param
                         saved_type = utils.FLAGS_RENAME[self.evt_type]
-                        param_camel = utils.convert_to_camel_case(param, "_")
+                        param_camel = utils.convert_to_camel_case(parameter, "_")
                         key_to_load = f"{saved_type}_{param_camel}"
                         is_key = utils.check_key_existence(
                             self.plt_path + "-" + subsys + ".hdf", key_to_load
                         )
                         if is_key:
                             old_data = pd.read_hdf(
-                                self.plt_path + "-" + subsys + ".hdf", key=key_to_load
+                                self.plt_path + "-" + subsys + ".hdf",
+                                key=key_to_load,
                             )
                             channel_mean = get_saved_df_hdf(
-                                self, subsys, param, old_data
+                                self, subsys, parameter, old_data
                             )
+                            # we need to repeat this operation for each param, otherwise only the mean of the last one survives
                             self.data = concat_channel_mean(self, channel_mean)
                         else:
                             self.data = self.add_channel_mean_column()
-
-                    if len(self.parameters) > 1:
-                        for param in self.parameters:
-                            parameter = (
-                                param.split("_var")[0] if "_var" in param else param
-                            )
-                            saved_type = utils.FLAGS_RENAME[self.evt_type]
-                            param_camel = utils.convert_to_camel_case(parameter, "_")
-                            key_to_load = f"{saved_type}_{param_camel}"
-                            is_key = utils.check_key_existence(
-                                self.plt_path + "-" + subsys + ".hdf", key_to_load
-                            )
-                            if is_key:
-                                old_data = pd.read_hdf(
-                                    self.plt_path + "-" + subsys + ".hdf",
-                                    key=key_to_load,
-                                )
-                                channel_mean = get_saved_df_hdf(
-                                    self, subsys, parameter, old_data
-                                )
-                                # we need to repeat this operation for each param, otherwise only the mean of the last one survives
-                                self.data = concat_channel_mean(self, channel_mean)
-                            else:
-                                self.data = self.add_channel_mean_column()
 
         if self.data.empty:
             utils.logger.error(
@@ -610,16 +588,10 @@ class AnalysisData:
                 ) * 100
 
     def is_spms(self) -> bool:
-        """Return True if 'location' (=fiber) and 'position' (=top, bottom) are strings."""
-        if self.data.empty:
+        """Return True for SiPM data (the channel map carries a barrel only for spms)."""
+        if self.data.empty or "barrel" not in self.data.columns:
             return False
-
-        if isinstance(self.data.iloc[0]["location"], str) and isinstance(
-            self.data.iloc[0]["position"], str
-        ):
-            return True
-        else:
-            return False
+        return self.data["barrel"].notna().any()
 
     def is_geds(self) -> bool:
         """Return True if 'location' (=string) and 'position' are NOT strings."""

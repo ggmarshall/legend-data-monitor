@@ -55,6 +55,10 @@ def mean_key(flag: str, param: str) -> str:
     return f"{flag}_{param}_mean"
 
 
+#: subsystems that get their own v1 file and contract file per run
+SUBSYSTEMS = ("geds", "spms")
+
+
 def run_file_name(
     period: str, run: str, datatype: str, subsystem: str, experiment: str = "l200"
 ) -> str:

@@ -1518,3 +1518,142 @@ def collect_stability_series(
         yaml.dump(output, f)
 
     return results
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# SiPM production by-products: per-cycle noise and the PE calibration in force
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+def read_spms_noise(prod_path: str, period: str, run: str, data_type: str = "phy"):
+    """
+    Collect ``baseline_curr_fwhm`` per SiPM from the per-cycle ``par_dsp_spms`` files.
+
+    Parameters
+    ----------
+    prod_path : str
+        Production version root (the folder containing ``generated/``).
+    period, run : str
+        Run to read.
+    data_type : str
+        Data type of the par files.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Cycle timestamp (``datetime`` index) x SiPM name, float32; empty when
+        the run has no par files.
+    """
+    folder = os.path.join(prod_path, "generated/par/dsp", data_type, period, run)
+    rows = {}
+    for path in sorted(glob.glob(os.path.join(folder, "*-par_dsp_spms.yaml"))):
+        key = os.path.basename(path).split("-")[4]
+        with open(path) as f:
+            pars = yaml.load(f, Loader=yaml.CLoader) or {}
+        rows[pd.Timestamp(key, tz="UTC")] = {
+            name: entry.get("baseline_curr_fwhm")
+            for name, entry in pars.items()
+            if isinstance(entry, dict)
+        }
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame.from_dict(rows, orient="index").astype("float32")
+    frame.index.name = "datetime"
+    return frame.sort_index()
+
+
+def read_spms_calibration(prod_path: str, start_key: str) -> pd.DataFrame:
+    """
+    Resolve the SiPM PE calibration (``energy_in_pe``/``is_valid_hit`` overrides) in force at ``start_key``.
+
+    Parameters
+    ----------
+    prod_path : str
+        Production version root (the folder containing ``inputs/``).
+    start_key : str
+        Timestamp key (``20260731T181831Z``) the run starts at.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per SiPM: ``pe_a``, ``pe_m``, ``threshold_a`` and the
+        ``source`` override file (its period/run tell how stale the
+        calibration is); empty when no override resolves.
+    """
+    from dbetto import TextDB
+
+    overrides = os.path.join(prod_path, "inputs/dataprod/overrides/hit")
+    validity = os.path.join(overrides, "validity.yaml")
+    if not os.path.exists(validity):
+        return pd.DataFrame()
+    with open(validity) as f:
+        entries = yaml.load(f, Loader=yaml.CLoader) or []
+    sources = [
+        path
+        for entry in entries
+        if str(entry.get("valid_from", "")) <= start_key
+        and entry.get("mode") != "remove"
+        for path in entry.get("apply", [])
+        if path.startswith("lar/")
+    ]
+    source = sources[-1] if sources else None
+    resolved = TextDB(overrides).on(timestamp=start_key)
+    rows = {}
+    for name in resolved.keys():
+        if not name.startswith("S"):
+            continue
+        ops = resolved[name].get("pars", {}).get("operations", {})
+        rows[name] = {
+            "pe_a": ops.get("energy_in_pe", {}).get("parameters", {}).get("a"),
+            "pe_m": ops.get("energy_in_pe", {}).get("parameters", {}).get("m"),
+            "threshold_a": ops.get("is_valid_hit", {}).get("parameters", {}).get("a"),
+            "source": source,
+        }
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame.from_dict(rows, orient="index").sort_index()
+    frame.index.name = "name"
+    return frame
+
+
+def write_spms_production_keys(
+    output_folder: str,
+    period: str,
+    run: str,
+    prod_path: str,
+    start_key: str | None = None,
+    data_type: str = "phy",
+) -> list:
+    """
+    Publish ``spms_noise/<run>`` and ``spms_calibration/<run>`` to the period contract.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring output root (the folder containing ``<period>/``).
+    period, run : str
+        Run to publish.
+    prod_path : str
+        Production version root (``generated/`` and ``inputs/`` live there).
+    start_key : str, optional
+        Run start key for the calibration lookup; skipped when None.
+    data_type : str
+        Data type key of the period contract file.
+
+    Returns
+    -------
+    list
+        Keys written.
+    """
+    path = period_contract_path(output_folder, period, data_type)
+    written = []
+    noise = read_spms_noise(prod_path, period, run, data_type)
+    if not noise.empty:
+        written.append(contract_writer.write_frame(path, f"spms_noise/{run}", noise))
+    if start_key is not None:
+        calib = read_spms_calibration(prod_path, start_key)
+        if not calib.empty:
+            written.append(
+                contract_writer.write_frame(path, f"spms_calibration/{run}", calib)
+            )
+    return written

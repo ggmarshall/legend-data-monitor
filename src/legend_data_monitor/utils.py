@@ -55,6 +55,7 @@ from .config.settings import (  # noqa: E402,F401
     SC_PARAMETERS,
     SPECIAL_PARAMETERS,
     SPECIAL_SYSTEMS,
+    SPMS_REDUCTIONS,
 )
 
 pkg = importlib.resources.files("legend_data_monitor")
@@ -534,6 +535,19 @@ def check_plot_settings(conf: dict) -> bool:
                 continue
 
             # other non-exposure checks
+
+            # plot structures are subsystem-specific
+            structure = plot_settings["plot_structure"]
+            spms_only = structure in ("per barrel", "per fiber")
+            geds_only = structure in ("per cc4", "array")
+            if (subsys == "spms") != spms_only and (spms_only or geds_only):
+                logger.error(
+                    "\033[91mPlot structure '%s' is not available for %s (plot '%s')\033[0m",
+                    structure,
+                    subsys,
+                    plot,
+                )
+                return False
 
             # if vs time was provided, need time window
             if (
@@ -2261,6 +2275,46 @@ def _build_detector_info_cached(metadata_path, start_key=None):
             str_chns[string].append(det)
 
     return {"detectors": detectors, "str_chns": dict(str_chns)}
+
+
+def build_spms_info(metadata_path, start_key=None):
+    """
+    Build SiPM channel information from LEGEND metadata, keyed by channel name.
+
+    Parameters
+    ----------
+    metadata_path : str
+        LEGEND metadata root (``<prod>/inputs``).
+    start_key : str, optional
+        Timestamp key selecting the channel map; latest when omitted.
+
+    Returns
+    -------
+    dict
+        name -> {daq_rawid, barrel, fiber, position, processable, usability}.
+    """
+    return copy.deepcopy(_build_spms_info_cached(metadata_path, start_key))
+
+
+@lru_cache(maxsize=None)
+def _build_spms_info_cached(metadata_path, start_key=None):
+    lmeta = LegendMetadata(metadata_path)
+    chmap = lmeta.channelmap(start_key) if start_key else lmeta.channelmap()
+    detectors = {}
+    for det, info in chmap.items():
+        if info["system"] != "spms" or info["name"] != det:
+            continue
+        analysis = info.get("analysis", {})
+        detectors[det] = {
+            "name": det,
+            "daq_rawid": info["daq"]["rawid"],
+            "barrel": info["location"]["barrel"],
+            "fiber": info["location"]["fiber"],
+            "position": info["location"]["position"],
+            "processable": analysis.get("processable", False),
+            "usability": analysis.get("usability", None),
+        }
+    return detectors
 
 
 def build_detector_info_per_period(auto_dir_path: str, run_dict: dict, period: str):
