@@ -1657,3 +1657,86 @@ def write_spms_production_keys(
                 contract_writer.write_frame(path, f"spms_calibration/{run}", calib)
             )
     return written
+
+
+#: (contract key, qcp metric) pairs checked by check_spms_thresholds
+SPMS_THRESHOLD_KEYS = [
+    key
+    for key, info in utils.MTG_PLOT_INFO.items()
+    if isinstance(info, dict) and str(info.get("title", "")).startswith("spms_")
+]
+
+
+def check_spms_thresholds(
+    output_folder: str, period: str, run: str, data_type: str = "phy"
+) -> dict:
+    """
+    Grade every SiPM against the spms bands and record the verdicts in ``qcp_summary.yaml``.
+
+    Reads the 60min bins of the run's spms contract file for each key listed
+    in ``mtg-plot-settings.yaml`` with an ``spms_*`` title (optionally
+    averaged over ``rolling`` bins first); verdicts land
+    under ``<sipm>/phy/<metric>`` next to the geds ones, and the magnitudes
+    behind a failing verdict are stashed for the issue records exactly as
+    :func:`utils.check_threshold` does for geds.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring output root (the folder containing ``<period>/``).
+    period, run : str
+        Run to grade.
+    data_type : str
+        Data type of the contract file.
+
+    Returns
+    -------
+    dict
+        ``{sipm: {metric: verdict}}`` for the SiPMs graded; empty when the
+        run has no spms contract file.
+    """
+    run_dir = os.path.join(output_folder, period, run)
+    contract = os.path.join(
+        run_dir, f"l200-{period}-{run}-{data_type}-spms-schema2.hdf"
+    )
+    if not os.path.isfile(contract):
+        utils.logger.debug("no spms contract at %s; no SiPM thresholds", contract)
+        return {}
+    qcp_path = os.path.join(run_dir, f"l200-{period}-{run}-qcp_summary.yaml")
+    output = utils.load_yaml_or_default(qcp_path, {})
+    graded = {}
+    for key in SPMS_THRESHOLD_KEYS:
+        info = utils.MTG_PLOT_INFO[key]
+        flag, _, param = key.partition("_")
+        try:
+            frame = contract_reader.read_binned_series(
+                contract, flag, param, "60min"
+            ).to_frame("mean")
+        except KeyError:
+            utils.logger.debug("...no %s in %s, skip", key, contract)
+            continue
+        t0 = [frame.index[0]]
+        if info.get("rolling"):
+            frame = frame.rolling(int(info["rolling"]), min_periods=1).mean()
+        for sipm in frame.columns:
+            series = frame[sipm].dropna()
+            if series.empty:
+                continue
+            output.setdefault(sipm, {}).setdefault("phy", {})
+            utils.check_threshold(
+                series,
+                sipm,
+                None,
+                t0,
+                list(info["limits"]),
+                info["title"],
+                output,
+                period=period,
+                run=run,
+            )
+            graded.setdefault(sipm, {})[info["title"]] = output[sipm]["phy"][
+                info["title"]
+            ]
+    with open(qcp_path, "w") as f:
+        yaml.dump(output, f)
+    return graded

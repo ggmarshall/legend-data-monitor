@@ -56,6 +56,13 @@ Per unattended invocation (`legend-data-monitor auto_run`):
   period file (`l200-<p>-{phy,cal}-monitoring.hdf`, e.g.
   `qc_rate_series/IsDischarge/<run>`, `fep_gain_stab/<run>`,
   `psd_stability/<run>/<det>`) as well as the run contract.
+- **SiPM metrics** (2026-08-21): `spms_baseln_stab`, `spms_noise_stab`,
+  `spms_dark_rate`, `spms_noisy_frac` are graded on the 60 min bins of the
+  spms contract (`l200-<p>-<r>-phy-spms-schema2.hdf`, which `data_ref`
+  points at) and carry excursions (hourly). Their `detector` is a SiPM name
+  (`S0NN`); `string`/`position` are absent (the schema keeps them as
+  germanium integers) — use the contract's `/detector_map` for barrel, fiber
+  and top/bottom. `plots[]` attach the barrel-side figures.
 - Exit codes: 0 all tasks ok; 1 ≥1 task failed (others still ran); 2
   config/environment error.
 

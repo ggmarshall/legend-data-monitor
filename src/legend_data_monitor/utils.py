@@ -1283,7 +1283,14 @@ ISSUE_METRIC_HIST_KEYS = {
     "escale_FEP_pos": "hist/IsPhysics_TrapemaxCtcCal",
     "escale_fwhm_FEP": "hist/IsPhysics_TrapemaxCtcCal",
     "escale_fwhm_583": "hist/IsPhysics_TrapemaxCtcCal",
+    "spms_baseln_stab": "hist/IsBsln_WfMode_var",
+    "spms_noise_stab": "hist/IsBsln_CurrFwhm_var",
+    "spms_dark_rate": "hist/IsBsln_NPulses",
+    "spms_noisy_frac": "hist/All_HasAnyNoise",
 }
+
+#: qcp metrics evaluated on the spms contract (their data_ref points there)
+SPMS_METRICS = {m for m in ISSUE_METRIC_HIST_KEYS if m.startswith("spms_")}
 
 # metrics whose numbers live in the period contract file; {run}/{det} filled in
 ISSUE_METRIC_PERIOD_KEYS = {
@@ -1322,14 +1329,17 @@ def _first_seen_runs(output_folder: str, period: str, run: str, key: str) -> dic
     return first
 
 
-def _issue_plots(run_dir: str, string: int | None) -> list:
-    """Diagnostic PNGs to attach to an issue: this detector's string, if rendered."""
-    if string is None:
-        return []
+def _issue_plots(run_dir: str, meta: dict) -> list:
+    """Diagnostic PNGs to attach to an issue: the detector's string (geds) or barrel side (spms), if rendered."""
     figs = os.path.join(run_dir, "figs")
     if not os.path.isdir(figs):
         return []
-    suffix = f"_st{int(string):02d}.png"
+    if meta.get("string") is not None:
+        suffix = f"_st{int(meta['string']):02d}.png"
+    elif meta.get("barrel") is not None:
+        suffix = f"_{meta['barrel']}_{meta['position']}.png"
+    else:
+        return []
     return [
         os.path.join(figs, name)
         for name in sorted(os.listdir(figs))
@@ -1393,8 +1403,13 @@ def check_cal_phy_thresholds(
                 # binned contract data (falling back to the summary itself)
                 hist_key = ISSUE_METRIC_HIST_KEYS.get(metric)
                 period_ref = ISSUE_METRIC_PERIOD_KEYS.get(metric)
-                if hist_key and os.path.isfile(contract_file):
-                    data_ref = {"file": contract_file, "key": hist_key}
+                ref_file = (
+                    contract_file.replace("-geds-schema2", "-spms-schema2")
+                    if metric in SPMS_METRICS
+                    else contract_file
+                )
+                if hist_key and os.path.isfile(ref_file):
+                    data_ref = {"file": ref_file, "key": hist_key}
                 elif period_ref:
                     period_file = os.path.join(
                         output_folder,
@@ -1428,9 +1443,9 @@ def check_cal_phy_thresholds(
                         first_seen_run=first_seen.get((ged, metric), run),
                         rawid=meta.get("daq_rawid"),
                         string=meta.get("string"),
-                        position=meta.get("position"),
+                        position=meta.get("position") if "string" in meta else None,
                         data_ref=data_ref,
-                        plots=_issue_plots(run_dir, meta.get("string")),
+                        plots=_issue_plots(run_dir, meta),
                         suggested_action=(
                             "if persistent and not spurious: review usability of "
                             f"{ged} in legend-datasets statuses "

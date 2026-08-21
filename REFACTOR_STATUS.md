@@ -310,11 +310,22 @@ pass, channel health only:
   FCbsln `n_pulses` ~0.2 per 100 us window (~2 kHz dark rate), one SiPM at a
   6 % noisy-waveform fraction against <1 % for the rest; 335 s, 0.75 GB peak.
 
-Still to do in S1: thresholds (`par-settings.yaml` spms limits are all null
-until a full run gives bands) and issue records; `plots/` renderers from the
-spms contract; full-run timing; p22 backfill. Then phase S2 (LAr veto
-performance from the evt tier). The dashboard SiPM page needs a rewrite against
-the spms contract (dashboard session).
+- **Full run** (p22/r012, spms only, 163 keys in one unchunked pass): 89 min,
+  12.3 GB peak (chunked `auto_run` will be far lower), v1 file 414 MB of which
+  376 MB are the per-event `IsPhysics_PeSum/PeMax` pivots (+ their unused
+  `_var`) — strip them like the classifiers once the dashboard reads spms.
+- **Thresholds** (`mtg-plot-settings.yaml` `spms_*` entries, bands from that
+  run) via `monitoring.check_spms_thresholds` in `phy_issues`: hourly
+  `wf_mode` variation ±0.05 %, `curr_fwhm` variation ±5 %, dark rate 0.002–1
+  pulses/window on a 6 h rolling mean (single empty hours are Poisson),
+  noisy-waveform fraction < 5 %. On r012: S070 fails `spms_noisy_frac`
+  (6.5 % all run, `alert`); everything else passes. Headline PNGs per
+  barrel×position; issue records carry the spms `data_ref` and those plots.
+
+Still to do: p22 spms backfill (needs a writer slot on the p22 tree) and the
+v1 per-event strip; then phase S2 (LAr veto performance from the evt tier).
+The dashboard SiPM page needs a rewrite against the spms contract (dashboard
+session).
 
 ## Remaining
 

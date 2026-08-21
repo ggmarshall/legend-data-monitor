@@ -370,13 +370,17 @@ def auto_run(
         det_info = utils.build_detector_info(
             os.path.join(auto_dir_path, "inputs"), start_key=start_key
         )
+        monitoring.check_spms_thresholds(mtg_folder, period, run, data_type=data_type)
+        spms_info = utils.build_spms_info(
+            os.path.join(auto_dir_path, "inputs"), start_key=start_key
+        )
         utils.check_cal_phy_thresholds(
             mtg_folder,
             period,
             run,
             data_type,
             det_info["detectors"],
-            detector_info=det_info["detectors"],
+            detector_info=det_info["detectors"] | spms_info,
             data_type=data_type,
         )
 
