@@ -341,6 +341,34 @@ def auto_run(
             render=render_plots,
         )
 
+    def task_phy_issues(logger=None):
+        """Turn the run's phy verdicts into issue records.
+
+        Last of the phy tasks on purpose: qc_plots writes the discharge /
+        saturated / dead-time verdicts after phy_summary_plots, and the
+        magnitudes every producer stashed for its verdict live in-process until
+        this single emission picks them up.
+        """
+        avail_runs = sorted(os.listdir(os.path.join(mtg_folder, period)))
+        avail_runs = [ar for ar in avail_runs if re.fullmatch(r"r\d{3}", ar)]
+        if not avail_runs:
+            return
+        start_key = (
+            sorted(os.listdir(os.path.join(search_directory, avail_runs[0])))[0]
+        ).split("-")[4]
+        det_info = utils.build_detector_info(
+            os.path.join(auto_dir_path, "inputs"), start_key=start_key
+        )
+        utils.check_cal_phy_thresholds(
+            mtg_folder,
+            period,
+            run,
+            data_type,
+            det_info["detectors"],
+            detector_info=det_info["detectors"],
+            data_type=data_type,
+        )
+
     task_list = [tasks.Task("check_calibration", task_check_calibration, period, run)]
     if new_files:
         task_list.append(
@@ -357,6 +385,7 @@ def auto_run(
             tasks.Task("phy_summary_plots", task_phy_summary_plots, period, run)
         )
         task_list.append(tasks.Task("qc_plots", task_qc_plots, period, run))
+        task_list.append(tasks.Task("phy_issues", task_phy_issues, period, run))
         task_list.append(
             tasks.Task("strip_transport", task_strip_transport, period, run)
         )
@@ -633,16 +662,6 @@ def summary_plots(
             run_to_apply=run_to_apply,
         )
 
-    utils.check_cal_phy_thresholds(
-        output_folder,
-        period,
-        current_run,
-        data_type,
-        det_info["detectors"],
-        detector_info=det_info["detectors"],
-        data_type=data_type,
-    )
-
     # FT failure rate plots
     if data_type not in ["ssc", "lac", "rdc"]:
 
@@ -827,7 +846,7 @@ def check_calib(
         output_folder,
         period,
         current_run,
-        "cal",
+        data_type if data_type in ["lac", "ssc", "rdc"] else "cal",
         det_info["detectors"],
         detector_info=det_info["detectors"],
         data_type=data_type,

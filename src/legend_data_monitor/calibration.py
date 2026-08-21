@@ -522,6 +522,51 @@ def write_psd_stability(
     )
 
 
+def record_psd_detail(
+    period: str, current_run: str, det_name: str, run_labels: list, eval_result: dict
+) -> None:
+    """
+    Stash the z-score behind a failed AoE_stab verdict for the issue record.
+
+    Run-axis quantities: no excursion (its ``longest_s`` means seconds), so
+    severity grades on the distance past the band.
+
+    Parameters
+    ----------
+    period, current_run : str
+        Keys of the verdict being explained.
+    det_name : str
+        Detector.
+    run_labels : list
+        Runs in the evaluation, aligned with the shift arrays.
+    eval_result : dict
+        :func:`evaluate_psd_performance` output.
+    """
+    if current_run not in run_labels:
+        return
+    i = run_labels.index(current_run)
+    slow = eval_result.get("slow_shifts") or []
+    sudden = eval_result.get("sudden_shifts") or []
+    if current_run in eval_result.get("sudden_shift_fail_runs", []) and i < len(sudden):
+        observed, threshold = sudden[i], [None, 0.25]
+    elif i < len(slow):
+        observed, threshold = slow[i], [-0.5, 0.5]
+    else:
+        return
+    if observed is None or np.isnan(observed):
+        return  # missing fit pars: the verdict carries no magnitude
+    utils.issues.record_detail(
+        period,
+        current_run,
+        "cal",
+        det_name,
+        "AoE_stab",
+        observed=float(observed),
+        threshold=threshold,
+        unit="sigma",
+    )
+
+
 def evaluate_psd_usability(
     period: str,
     current_run: str,
@@ -552,6 +597,8 @@ def evaluate_psd_usability(
     # if all nan entries, comment and exit
     if eval_result["status"] is None:
         return
+    if eval_result["status"] is False:
+        record_psd_detail(period, current_run, det_name, run_labels, eval_result)
 
     # output_dir is <monitoring root>/<period> here; the writer joins period
     write_psd_stability(
@@ -930,6 +977,7 @@ def check_calibration(
         timestamps = hit_files_data[mask].timestamp.to_numpy()
         if timestamps.size == 0:
             continue
+        t_first = float(timestamps[0])
         timestamps -= timestamps[0]
         energies = hit_files_data[mask].cuspEmax_ctc_cal.to_numpy()
 
@@ -985,6 +1033,8 @@ def check_calibration(
         else:
             stable = False
         utils.update_evaluation_in_memory(output, ged, "cal", "FEP_gain_stab", stable)
+        if not stable and fep_stats.get(ged):
+            record_fep_detail(period, run, "cal", ged, fep_stats[ged], t_first)
 
         if fwhm_ok:
             # bsln stability (only if not first run)
@@ -999,6 +1049,17 @@ def check_calibration(
                     utils.update_evaluation_in_memory(
                         output, ged, "cal", "const_stab", gain_dev <= 2
                     )
+                    if gain_dev > 2:
+                        utils.issues.record_detail(
+                            period,
+                            run,
+                            "cal",
+                            ged,
+                            "const_stab",
+                            observed=float(gain_dev),
+                            threshold=[None, 2.0],
+                            unit="keV",
+                        )
 
         else:
             if not first_run:
@@ -1022,6 +1083,49 @@ def check_calibration(
 
     with open(usability_map_file, "w") as f:
         yaml.dump(output, f)
+
+
+def record_fep_detail(
+    period: str, run: str, datatype: str, ged: str, computed: dict, t_first: float
+) -> None:
+    """
+    Stash the magnitudes behind a failed FEP_gain_stab verdict for the issue record.
+
+    Parameters
+    ----------
+    period, run, datatype : str
+        Keys of the verdict being explained.
+    ged : str
+        Detector.
+    computed : dict
+        :func:`compute_fep_gain_variation` output (``stats`` with ``time`` in
+        seconds since the first event, ``drift`` in keV).
+    t_first : float
+        Unix time of the first event, to anchor the window in absolute time.
+    """
+    stats = computed["stats"]
+    # a TimedeltaIndex, so the excursion's longest_s really is seconds
+    series = pd.Series(
+        np.asarray(computed["drift"], dtype=float),
+        index=pd.to_timedelta(stats["time"].to_numpy(dtype=float), unit="s"),
+    )
+    valid = series.dropna()
+    if valid.empty:
+        return
+    worst = valid.iloc[int(np.argmax(np.abs(valid.to_numpy())))]
+    start = pd.Timestamp(t_first, unit="s", tz="UTC")
+    utils.issues.record_detail(
+        period,
+        run,
+        datatype,
+        ged,
+        "FEP_gain_stab",
+        observed=float(worst),
+        threshold=[-2.0, 2.0],
+        unit="keV",
+        window=[str(start + valid.index[0]), str(start + valid.index[-1])],
+        excursion=utils.issues.evaluate_excursion(series, -2.0, 2.0),
+    )
 
 
 ESCALE_METRICS = {
@@ -1316,6 +1420,7 @@ def check_calibration_lac_ssc(
         timestamps = hit_files_data[mask].timestamp.to_numpy()
         if timestamps.size == 0:
             continue
+        t_first = float(timestamps[0])
         timestamps -= timestamps[0]
         energies = hit_files_data[mask].cuspEmax_ctc_cal.to_numpy()
 
@@ -1370,6 +1475,8 @@ def check_calibration_lac_ssc(
         utils.update_evaluation_in_memory(
             output, ged, data_type, "FEP_gain_stab", stable
         )
+        if not stable and fep_stats.get(ged):
+            record_fep_detail(period, run, data_type, ged, fep_stats[ged], t_first)
 
     write_fep_gain_contract(output_folder, period, run, fep_stats, data_type=data_type)
 

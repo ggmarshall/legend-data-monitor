@@ -782,6 +782,11 @@ def qc_average(
 
             if par not in ("IsDischarge", "IsSaturated"):
                 continue
+            info = utils.MTG_PLOT_INFO[par]
+            limit = info["limits"][1]  # no lower limit for rates
+            # the hourly series behind the verdict, for the issue's excursion stats
+            hourly = compute_qc_rate_series(store[key], period, detectors=detectors)
+            dt_info = utils.MTG_PLOT_INFO["tot_discharge_dead_time"]
             for det_list in str_chns.values():
                 for det_name in det_list:
                     rawid = detectors[det_name]["daq_rawid"]
@@ -790,23 +795,48 @@ def qc_average(
                             f"{det_name} ({rawid}) missing in dataframe for {par}"
                         )
                         continue
-                    condition = bool(
-                        (rates[rawid] > utils.MTG_PLOT_INFO[par]["limits"][1]).any()
-                    )  # no lower limit for rates
+                    condition = bool((rates[rawid] > limit).any())
                     utils.update_evaluation_in_memory(
-                        output,
-                        det_name,
-                        "phy",
-                        utils.MTG_PLOT_INFO[par]["title"],
-                        not condition,
+                        output, det_name, "phy", info["title"], not condition
                     )
+                    if condition:
+                        series = (
+                            hourly[det_name]
+                            if hourly is not None and det_name in hourly
+                            else None
+                        )
+                        utils.issues.record_detail(
+                            period,
+                            run,
+                            "phy",
+                            det_name,
+                            info["title"],
+                            observed=float(rates[rawid]),
+                            threshold=[None, limit],
+                            unit=info.get("unit"),
+                            window=(
+                                [str(series.index[0]), str(series.index[-1])]
+                                if series is not None and len(series)
+                                else None
+                            ),
+                            excursion=utils.issues.evaluate_excursion(
+                                series, None, limit
+                            ),
+                        )
                     utils.update_evaluation_in_memory(
-                        output,
-                        det_name,
-                        "phy",
-                        utils.MTG_PLOT_INFO["tot_discharge_dead_time"]["title"],
-                        not dt_condition,
+                        output, det_name, "phy", dt_info["title"], not dt_condition
                     )
+                    if dt_condition:
+                        utils.issues.record_detail(
+                            period,
+                            run,
+                            "phy",
+                            det_name,
+                            dt_info["title"],
+                            observed=float(dead_time["dead_time_pct"]),
+                            threshold=list(dt_info["limits"]),
+                            unit=dt_info.get("unit"),
+                        )
 
     write_qc_rates(output_folder, period, run, rates_by_par, detectors)
 

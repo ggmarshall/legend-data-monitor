@@ -1263,13 +1263,22 @@ def get_output_path(config: dict):
 # triage agent can actually re-measure (not just the pass/fail summary)
 ISSUE_METRIC_HIST_KEYS = {
     "baseln_stab": "hist/IsPulser_Baseline",
-    "baseln_spike": "hist/IsPulser_Baseline",
+    "baseln_spike": "hist/IsPulser_BlStd",
     "pulser_stab": "hist/IsPulser_TrapemaxCtcCal",
-    "FEP_gain_stab": "hist/IsPulser_TrapemaxCtcCal",
     "const_stab": "hist/IsPulser_TrapemaxCtcCal",
     "escale_FEP_pos": "hist/IsPhysics_TrapemaxCtcCal",
     "escale_fwhm_FEP": "hist/IsPhysics_TrapemaxCtcCal",
     "escale_fwhm_583": "hist/IsPhysics_TrapemaxCtcCal",
+}
+
+# metrics whose numbers live in the period contract file; {run}/{det} filled in
+ISSUE_METRIC_PERIOD_KEYS = {
+    "FEP_gain_stab": ("cal", "fep_gain_stab/{run}"),
+    "escale_SEP_residual": ("cal", "escale/{run}"),
+    "AoE_stab": ("cal", "psd_stability/{run}/{det}"),
+    "discharge_rate": ("phy", "qc_rate_series/IsDischarge/{run}"),
+    "saturated_rate": ("phy", "qc_rate_series/IsSaturated/{run}"),
+    "tot_discharge_dead_time": ("phy", "dead_time/{run}"),
 }
 
 
@@ -1369,8 +1378,19 @@ def check_cal_phy_thresholds(
                 # the qcp summary is only the verdict; point triage at the
                 # binned contract data (falling back to the summary itself)
                 hist_key = ISSUE_METRIC_HIST_KEYS.get(metric)
+                period_ref = ISSUE_METRIC_PERIOD_KEYS.get(metric)
                 if hist_key and os.path.isfile(contract_file):
                     data_ref = {"file": contract_file, "key": hist_key}
+                elif period_ref:
+                    period_file = os.path.join(
+                        output_folder,
+                        period,
+                        f"l200-{period}-{period_ref[0]}-monitoring.hdf",
+                    )
+                    data_ref = {
+                        "file": period_file,
+                        "key": period_ref[1].format(run=run, det=ged),
+                    }
                 else:
                     data_ref = {"file": usability_map_file, "key": metric}
                 meta = (detector_info or {}).get(ged, {})
@@ -1519,6 +1539,23 @@ def find_over_threshold(
     return over_threshold
 
 
+def metric_unit(title: str) -> str | None:
+    """Return the unit of the series a qcp metric is checked on (MTG settings are keyed by parameter, metrics by title)."""
+    for info in MTG_PLOT_INFO.values():
+        if isinstance(info, dict) and info.get("title") == title:
+            return info.get("unit")
+    return None
+
+
+def worst_sample(window: pd.Series, low, high) -> float:
+    """Return the sample furthest past either bound (a two-sided band can fail low)."""
+    values = window.to_numpy(dtype=float)
+    over = values - high if high is not None else np.full_like(values, -np.inf)
+    under = low - values if low is not None else np.full_like(values, -np.inf)
+    worst = np.nanargmax(np.maximum(over, under))
+    return float(values[worst])
+
+
 def check_threshold(
     data_series: pd.Series,
     channel_name: str,
@@ -1569,16 +1606,15 @@ def check_threshold(
         if window is not None:
             low, high = threshold
             excursion = issues.evaluate_excursion(window, low, high)
-            worst = window.max() if high is not None else window.min()
             issues.record_detail(
                 period,
                 run,
                 "phy",
                 channel_name,
                 parameter,
-                observed=float(worst),
+                observed=worst_sample(window, low, high),
                 threshold=list(threshold),
-                unit=MTG_PLOT_INFO.get(parameter, {}).get("unit"),
+                unit=metric_unit(parameter),
                 window=[str(window.index[0]), str(window.index[-1])],
                 excursion=excursion,
             )

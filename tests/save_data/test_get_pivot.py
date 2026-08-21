@@ -19,7 +19,9 @@ def _chunk(i, parameter, channels=(1084803, 1084804), rows=60):
     )
     # the pipeline writes <param>_mean and <param>_var alongside the values
     frame[parameter + "_mean"] = 1000.0 + i
-    frame[parameter + "_var"] = (frame[parameter] / frame[parameter + "_mean"] - 1) * 100
+    frame[parameter + "_var"] = (
+        frame[parameter] / frame[parameter + "_mean"] - 1
+    ) * 100
     return frame
 
 
@@ -55,7 +57,11 @@ def test_appended_chunks_accumulate_whatever_the_name(tmp_path, parameter):
 def test_unknown_kind_is_rejected(tmp_path):
     with pytest.raises(ValueError):
         save_data.get_pivot(
-            _chunk(0, "baseline"), "baseline", "K", str(tmp_path / "x.hdf"), "append",
+            _chunk(0, "baseline"),
+            "baseline",
+            "K",
+            str(tmp_path / "x.hdf"),
+            "append",
             kind="mystery",
         )
 
@@ -64,6 +70,11 @@ def test_overwrite_saving_ignores_history(tmp_path):
     path = str(tmp_path / "l200-p22-r000-phy-geds.hdf")
     for i in range(2):
         save_data.get_pivot(
-            _chunk(i, "baseline"), "baseline", "IsPulser_X", path, "overwrite", kind="abs"
+            _chunk(i, "baseline"),
+            "baseline",
+            "IsPulser_X",
+            path,
+            "overwrite",
+            kind="abs",
         )
     assert len(pd.read_hdf(path, key="IsPulser_X")) == 60

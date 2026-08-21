@@ -27,7 +27,7 @@ PROD_ROOTS = {
 
 
 def chunk_lists(generated_path: str, period: str, run: str) -> list:
-    """The run's chunk key lists, in processing order (whole list if unsplit)."""
+    """Return the run's chunk key lists in processing order (whole list if unsplit)."""
     mtg = os.path.join(generated_path, "generated", "tmp", "mtg", period, run)
     parts = glob.glob(os.path.join(mtg, "new_keys_part_*.filekeylist"))
     if parts:
@@ -37,7 +37,7 @@ def chunk_lists(generated_path: str, period: str, run: str) -> list:
 
 
 def config_entries(parameter: str, subsystem: str = "geds") -> dict:
-    """The packaged plot-config entries that load ``parameter``."""
+    """Return the packaged plot-config entries that load ``parameter``."""
     pkg = importlib.resources.files("legend_data_monitor")
     with open(pkg / "settings" / f"{subsystem}-dict.yaml") as f:
         entries = yaml.load(f, Loader=yaml.CLoader)[subsystem]
@@ -174,3 +174,62 @@ def repair_parameter(
     )
     shutil.rmtree(scratch, ignore_errors=True)
     return replaced
+
+
+def refresh_contract(
+    output_folder: str,
+    ref_version: str,
+    period: str,
+    run: str,
+    prod_root: str = PROD_ROOTS["lngs"],
+    data_type: str = "phy",
+    experiment: str = "l200",
+) -> int:
+    """
+    Rebuild every contract key that still has v1 backing, keeping the rest.
+
+    A keyed refresh rather than a full rebuild on purpose: the classifier
+    pivots are stripped from finished runs, so their contract groups exist
+    without a v1 source and a rebuild would lose them.
+
+    Parameters
+    ----------
+    output_folder : str
+        Output root given to ``auto_run``.
+    ref_version : str
+        Production reference version.
+    period, run : str
+        Run to refresh.
+    prod_root : str
+        Production environment root (detector metadata).
+    data_type : str
+        Data type (``phy``).
+    experiment : str
+        Experiment prefix in file names.
+
+    Returns
+    -------
+    n_keys : int
+        Number of v1 keys refreshed.
+    """
+    generated_path = os.path.join(output_folder, ref_version)
+    v1_file = os.path.join(
+        generated_path,
+        "generated/plt/hit",
+        data_type,
+        period,
+        run,
+        f"{experiment}-{period}-{run}-{data_type}-geds.hdf",
+    )
+    with pd.HDFStore(v1_file, "r") as store:
+        keys = [k.lstrip("/") for k in store.keys() if not k.endswith("_info")]
+    contract_build.build_contract_files(
+        generated_path,
+        period,
+        run,
+        metadata_path=os.path.join(prod_root, ref_version, "inputs"),
+        data_type=data_type,
+        experiment=experiment,
+        keys=keys,
+    )
+    return len(keys)

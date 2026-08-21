@@ -27,9 +27,9 @@ def test_unsplit_run_falls_back_to_the_whole_list(tmp_path):
     mtg = tmp_path / "generated/tmp/mtg/p22/r012"
     mtg.mkdir(parents=True)
     (mtg / "new_keys.filekeylist").write_text("k\n")
-    assert [os.path.basename(p) for p in repair.chunk_lists(str(tmp_path), "p22", "r012")] == [
-        "new_keys.filekeylist"
-    ]
+    assert [
+        os.path.basename(p) for p in repair.chunk_lists(str(tmp_path), "p22", "r012")
+    ] == ["new_keys.filekeylist"]
     assert repair.chunk_lists(str(tmp_path), "p22", "r999") == []
 
 
@@ -41,8 +41,13 @@ def test_config_entries_select_the_parameter():
 
 def _v1(path, fill):
     idx = pd.date_range("2026-01-01", periods=30, freq="min")
-    for key in ["IsPulser_Baseline", "IsPulser_BlMean", "IsPulser_BlMean_var",
-                "IsPulser_BlMean_pulser01anaRatio", "IsPulser_BlMeanFoo"]:
+    for key in [
+        "IsPulser_Baseline",
+        "IsPulser_BlMean",
+        "IsPulser_BlMean_var",
+        "IsPulser_BlMean_pulser01anaRatio",
+        "IsPulser_BlMeanFoo",
+    ]:
         pd.DataFrame(fill, index=idx, columns=[1, 2]).to_hdf(path, key=key, mode="a")
     pd.DataFrame.from_dict({"unit": "ADC"}, orient="index", columns=["Value"]).to_hdf(
         path, key="IsPulser_BlMean_info", mode="a"

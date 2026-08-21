@@ -42,6 +42,7 @@ def main():
     add_plot_run_parser(subparsers)
     add_repack_parser(subparsers)
     add_repair_parser(subparsers)
+    add_refresh_parser(subparsers)
     add_get_exposure(subparsers)
     add_get_runinfo(subparsers)
 
@@ -478,6 +479,44 @@ def repair_cli(args):
         )
         legend_data_monitor.utils.logger.info(
             "%s-%s: %d key(s) repaired", args.p, run, len(replaced)
+        )
+    return 0
+
+
+def add_refresh_parser(subparsers):
+    """Configure :func:`.repair.refresh_contract` command line interface."""
+    parser = subparsers.add_parser(
+        "refresh_contract",
+        description="""Rebuild every contract key that still has a v1 source
+        (keyed refresh: classifier groups without v1 backing are kept), e.g.
+        after a change in how the contract is binned or annotated.""",
+    )
+    parser.add_argument("--output_folder", required=True, help="auto_run output root.")
+    parser.add_argument("--ref_version", required=True, help="e.g. auto/v2.0.0.")
+    parser.add_argument("--p", required=True, help="Period, eg p22.")
+    parser.add_argument("--r", required=True, nargs="+", help="Run(s), eg r012.")
+    parser.add_argument("--cluster", default="lngs", choices=["lngs", "nersc"])
+    parser.add_argument("--prod_root", default=None, help="Overrides --cluster.")
+    parser.add_argument("--data_type", default="phy")
+    parser.set_defaults(func=refresh_cli)
+
+
+def refresh_cli(args):
+    """Refresh the contract of one or more runs."""
+    from . import repair
+
+    prod_root = args.prod_root or repair.PROD_ROOTS[args.cluster]
+    for run in args.r:
+        n = repair.refresh_contract(
+            args.output_folder,
+            args.ref_version,
+            args.p,
+            run,
+            prod_root=prod_root,
+            data_type=args.data_type,
+        )
+        legend_data_monitor.utils.logger.info(
+            "%s-%s: %d key(s) refreshed", args.p, run, n
         )
     return 0
 

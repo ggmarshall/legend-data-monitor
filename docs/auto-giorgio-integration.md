@@ -43,6 +43,19 @@ Per unattended invocation (`legend-data-monitor auto_run`):
   `alert` only when the excursion is sustained (`frac_out` ≥ 5 %) and has not
   recovered by the end of the window; everything else is a `warning`. Run
   auto-giorgio with `MON_MIN_SEVERITY=alert` unless you want the long tail.
+- **Which metrics carry what** (2026-08-21): `excursion` is computed only where
+  a genuine time series backs the verdict — `pulser_stab`, `baseln_stab`,
+  `baseln_spike` (hourly), `discharge_rate`, `saturated_rate` (hourly), and
+  `FEP_gain_stab` (600 s bins); `longest_s` is always seconds. Run-axis
+  metrics (`escale_*`, `AoE_stab`) and scalars (`const_stab`,
+  `tot_discharge_dead_time`) carry `observed`/`threshold`/`unit` but no
+  excursion, so they grade on the distance past the band; `npeak`/`fwhm_ok`
+  have no magnitude and stay `warning`. Consequence of wiring: one-sided phy
+  metrics (`baseln_spike`, the rates) can now grade `alert` when sustained —
+  before they could only ever be `warning`. `data_ref` may point into the
+  period file (`l200-<p>-{phy,cal}-monitoring.hdf`, e.g.
+  `qc_rate_series/IsDischarge/<run>`, `fep_gain_stab/<run>`,
+  `psd_stability/<run>/<det>`) as well as the run contract.
 - Exit codes: 0 all tasks ok; 1 ≥1 task failed (others still ran); 2
   config/environment error.
 
