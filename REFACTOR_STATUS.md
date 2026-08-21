@@ -296,7 +296,13 @@ the dashboard session with file:line references.
    24/26 and 7 now grade `alert` on distance past the band — including
    *improved* resolutions (symmetric bands); open question whether resolution
    metrics should grade one-sided.
-3. **slow_control** output under the contract.
+3. ~~**slow_control** output under the contract~~ **DONE (2026-08-21, d9c2bbd)**:
+   retrieval never worked (the diode-info merge ate every rack/clean-room
+   row, so no SC file was ever written anywhere, production included); fixed,
+   and each (parameter, run) is published as `slow_control/<param>/<run>` in
+   the period contract file (UTC DatetimeIndex, value/unit/limits).
+   Live-verified on p22/r012 (8 parameters, 1-9 k readings each); dashboard
+   overlay reader change handed to the dashboard session.
 4. **Retire v1 writer** (`save_data.save_hdf` pivots) once the dashboard reads v2 —
    then drop the `-schema2` infix and the plotting→save_hdf coupling disappears with it.
 5. ~~**Phase 6 — dashboard phy migration**~~ **DONE (2026-08-11)**: the dashboard
