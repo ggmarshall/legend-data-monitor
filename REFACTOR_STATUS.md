@@ -288,9 +288,14 @@ the dashboard session with file:line references.
    `plots/`; then delete `shelve`/`pickle.dumps` package-wide. Blocked on real/cal
    test data (mock tree has none) — build against a production tree or extend the
    mock tree with cal fixtures first.
-2. **Excursion wiring**: threshold evaluations feeding `qcp_summary.yaml` should call
-   `issues.evaluate_excursion` on the binned series so issue payloads carry the
-   spurious-vs-persistent stats (currently issues are emitted from the qcp booleans).
+2. ~~**Excursion wiring**~~ **DONE (2026-08-21, 94f7c81)**: every producer
+   stashes its magnitudes; excursions where a real time series exists
+   (pulser/baseline, qc rates, FEP bins), scalars elsewhere; phy issues emitted
+   once by a final `phy_issues` task (the qc-rate verdicts never reached the
+   emitter before). On p22/r012 cal issues went from 0 magnitude fields to
+   24/26 and 7 now grade `alert` on distance past the band — including
+   *improved* resolutions (symmetric bands); open question whether resolution
+   metrics should grade one-sided.
 3. **slow_control** output under the contract.
 4. **Retire v1 writer** (`save_data.save_hdf` pivots) once the dashboard reads v2 —
    then drop the `-schema2` infix and the plotting→save_hdf coupling disappears with it.
