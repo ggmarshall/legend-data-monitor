@@ -349,6 +349,51 @@ strip); the dashboard SiPM/LAr pages need a rewrite against the spms contract
 and the `lar_*` keys (dashboard session). The LLAMA page has no producer
 anywhere (out of scope).
 
+## Issue-stream semantics + p22 re-grade (2026-08-22)
+
+Two changes to how verdicts become issues (`bc1e40a`), then the whole p22 issue
+stream re-derived so the tree matches the code.
+
+- **Array-wide collapse** (`issues.collapse_correlated`): one metric failing on
+  >=30 % of the detectors it was evaluated on (and >=5 of them) is one
+  common-mode event, not N detector problems. Those records become a single
+  record on a `spms-array`/`geds-array` pseudo-detector carrying the worst
+  member's magnitudes plus `affected_detectors` / `affected_frac`. The 30 %
+  floor is calibrated on p22: per-detector cal metrics fail on 10-25 % of the
+  array in a normal run (never collapse), the SiPM noise events on 33-100 %.
+- **Resolution graded one-sided**: `escale_fwhm_FEP`/`escale_fwhm_583` fail only
+  above the band -- an improved FWHM is not an issue. `classify_severity` grew a
+  `reference` argument (the band centre the escale evaluator already recorded)
+  so a one-sided band still has a half-width and a degraded detector can still
+  reach `alert`.
+
+**p22 re-grade** (14 runs, ~24 min each, verdicts re-derived from the
+contract/period files -- no raw reloading; the stale stream predated the
+excursion wiring and the SiPM checks). Against the pre-regrade backup
+(`/data1/users/marshall/lmon-v2-p22-prerregrade-backup`):
+
+- records 420 -> 383, but **magnitudes 93/420 -> 339/383** and **alerts 12 ->
+  72**: severity finally discriminates instead of everything being `warning`.
+- fwhm records 157 -> 71: **86 of them were detectors whose resolution had
+  improved**. Every other cal metric identical (AoE_stab 37, FEP_gain_stab 16,
+  const_stab 16, npeak 24...), and geds phy identical (pulser_stab 46,
+  baseln_stab 45, baseln_spike 10) -- the re-grade is faithful; only the
+  intended thing moved.
+- 44 SiPM/LAr records appear (they were graded but never emitted), and
+  `tot_discharge_dead_time` -- a *run-level* quantity that duplicates itself
+  across all 59 detectors -- now emits once per run instead of 59 times.
+- 12 array records stand in for 631 per-detector ones; the phy stream would be
+  773 records uncollapsed, it is 154.
+- The pass also wrote the period families that were missing since the backfill:
+  `cal_points` res/res_quad, `param_stability/*_std`, `gain_shift/*_std`,
+  `pul_cusp/kevdiff`, `event_rate_qc` -- all 14 runs.
+
+Known follow-ups: scalar one-sided metrics (`tot_discharge_dead_time`, the
+rates) have no `reference`, so they can never grade `alert` however far past
+the band -- recording `reference=0` for fractions whose floor is zero would fix
+it (and wants a re-grade to stay consistent). SiPM headline PNGs exist only for
+r012, so array records attach no plots elsewhere.
+
 ## Remaining
 
 1. ~~**Pickled-figure shelve writers**~~ **DONE (2026-08-20)**, see above. Was:
