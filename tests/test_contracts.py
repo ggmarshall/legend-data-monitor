@@ -423,3 +423,123 @@ def test_qc_rate_detail_reaches_the_record_with_excursion(tmp_path):
     assert issue.severity == "alert"  # sustained and not recovered
     assert issue.data_ref["key"] == "qc_rate_series/IsDischarge/r012"
     issues.clear_details()
+
+
+# ---------------------------------------------------------------------------
+# one-sided bands (resolution) and correlated (array-wide) collapse
+# ---------------------------------------------------------------------------
+
+
+def test_severity_one_sided_band_grades_on_the_reference():
+    # resolution band: centre 3.0 keV, upper bound 3.3 -> half-width 0.3
+    assert issues.classify_severity(3.4, [None, 3.3], None, reference=3.0) == "warning"
+    assert issues.classify_severity(3.7, [None, 3.3], None, reference=3.0) == "alert"
+    # a value inside (or below) the band is never an alert
+    assert issues.classify_severity(2.0, [None, 3.3], None, reference=3.0) == "warning"
+    # without a reference the half-width is unknowable -> stays warning
+    assert issues.classify_severity(3.7, [None, 3.3], None) == "warning"
+
+
+def test_escale_resolution_band_is_one_sided():
+    from legend_data_monitor import calibration
+
+    usability = {"p22-r000": "on", "p22-r001": "on", "p22-r002": "on"}
+    # a detector whose FWHM improves in the target run, well below the band
+    det_results = {
+        "fwhms_peaks": {2614.511: {"p22-r000": 3.0, "p22-r001": 3.0, "p22-r002": 2.0}},
+        "fwhms_err_peaks": {
+            2614.511: {"p22-r000": 0.1, "p22-r001": 0.1, "p22-r002": 0.1}
+        },
+        "mus_keV_first_cal_peaks": {
+            2614.511: {"p22-r000": 2614.5, "p22-r001": 2614.5, "p22-r002": 2610.0}
+        },
+    }
+    issues.clear_details()
+    verdicts = calibration.evaluate_escale_metrics(
+        "V02160A", det_results, usability, "p22", "r002"
+    )
+    # improved resolution passes; a peak position that moved still fails
+    assert verdicts["escale_fwhm_FEP"] is True
+    assert verdicts["escale_FEP_pos"] is False
+
+    # a degraded resolution still fails, with an upper-bounded threshold
+    det_results["fwhms_peaks"][2614.511]["p22-r002"] = 5.0
+    verdicts = calibration.evaluate_escale_metrics(
+        "V02160A", det_results, usability, "p22", "r002"
+    )
+    assert verdicts["escale_fwhm_FEP"] is False
+    detail = issues.pop_detail("p22", "r002", "cal", "V02160A", "escale_fwhm_FEP")
+    assert detail["threshold"][0] is None
+    # the band centre is the mean over all "on" runs, target included
+    assert detail["observed"] == 5.0
+    assert detail["reference"] == pytest.approx(11.0 / 3)
+    assert (
+        issues.classify_severity(
+            detail["observed"],
+            detail["threshold"],
+            None,
+            reference=detail["reference"],
+        )
+        == "alert"
+    )
+
+
+def _spms_failures(n, metric="spms_noisy_frac", observed=0.06):
+    return [
+        _issue(
+            detector=f"S{i:03d}",
+            metric=metric,
+            severity="warning",
+            observed=observed + i / 1000,
+            threshold=[None, 0.05],
+            plots=[f"/figs/{metric}_IB_top.png"],
+            first_seen_run="r003" if i else "r001",
+        )
+        for i in range(n)
+    ]
+
+
+def test_correlated_failures_collapse_to_one_array_record():
+    records = _spms_failures(30) + [_issue(detector="V02160A", metric="baseln_stab")]
+    out = issues.collapse_correlated(
+        records,
+        {"spms_noisy_frac": 58, "baseln_stab": 59},
+        {"spms_noisy_frac": "spms", "baseln_stab": "geds"},
+    )
+    assert len(out) == 2
+    array, other = out
+    assert array.detector == "spms-array"
+    assert array.issue_id == "p15-r002-phy-spms-array-spms_noisy_frac"
+    assert array.affected_frac == pytest.approx(30 / 58, abs=1e-3)
+    assert len(array.affected_detectors) == 30 and "S000" in array.affected_detectors
+    # represents the worst member and the earliest first_seen of the group
+    assert array.observed == pytest.approx(0.06 + 29 / 1000)
+    assert array.first_seen_run == "r001"
+    assert array.plots == ["/figs/spms_noisy_frac_IB_top.png"]  # deduped
+    assert "common mode" in array.suggested_action
+    assert array.rawid is None and array.string is None
+    # the unrelated single-detector issue is untouched
+    assert other.detector == "V02160A"
+
+
+def test_uncorrelated_failures_stay_per_detector():
+    # 4 detectors is below the floor; 8 of 59 is below the fraction
+    assert (
+        len(issues.collapse_correlated(_spms_failures(4), {"spms_noisy_frac": 58})) == 4
+    )
+    records = _spms_failures(8, metric="escale_fwhm_583")
+    assert len(issues.collapse_correlated(records, {"escale_fwhm_583": 59})) == 8
+
+
+def test_collapse_keeps_the_worst_severity():
+    records = _spms_failures(10)
+    records[3] = _issue(
+        detector="S900",
+        metric="spms_noisy_frac",
+        severity="alert",
+        observed=0.055,
+        threshold=[None, 0.05],
+    )
+    out = issues.collapse_correlated(records, {"spms_noisy_frac": 20})
+    assert len(out) == 1 and out[0].severity == "alert"
+    assert out[0].detector == "array"  # no subsystem label given

@@ -1292,6 +1292,13 @@ ISSUE_METRIC_HIST_KEYS = {
 #: qcp metrics evaluated on the spms contract (their data_ref points there)
 SPMS_METRICS = {m for m in ISSUE_METRIC_HIST_KEYS if m.startswith("spms_")}
 
+
+#: subsystem each metric belongs to, naming the array-level pseudo-detector a
+#: correlated failure collapses onto (see issues.collapse_correlated)
+def _metric_subsystem(metric: str) -> str:
+    return "spms" if metric.startswith("spms_") else "geds"
+
+
 # metrics whose numbers live in the period contract file; {run}/{det} filled in
 ISSUE_METRIC_PERIOD_KEYS = {
     "FEP_gain_stab": ("cal", "fep_gain_stab/{run}"),
@@ -1434,6 +1441,7 @@ def check_cal_phy_thresholds(
                             detail.get("observed"),
                             detail.get("threshold"),
                             detail.get("excursion"),
+                            reference=detail.get("reference"),
                         ),
                         period=period,
                         run=run,
@@ -1441,6 +1449,7 @@ def check_cal_phy_thresholds(
                         observed=detail.get("observed"),
                         threshold=detail.get("threshold"),
                         unit=detail.get("unit"),
+                        reference=detail.get("reference"),
                         window=detail.get("window"),
                         excursion=detail.get("excursion"),
                         first_seen_run=first_seen.get((ged, metric), run),
@@ -1456,6 +1465,20 @@ def check_cal_phy_thresholds(
                         ),
                     )
                 )
+
+    # an array-wide event trips one metric on most of the array at once; emit it
+    # as a single record instead of one per channel (evaluated counts come from
+    # the summary, so the fraction is against what was actually checked)
+    evaluated: dict = {}
+    for det_data in output.values():
+        for metric, verdict in det_data.get(key, {}).items():
+            if verdict is not None:
+                evaluated[metric] = evaluated.get(metric, 0) + 1
+    found = issues.collapse_correlated(
+        found,
+        evaluated,
+        {issue.metric: _metric_subsystem(issue.metric) for issue in found},
+    )
 
     if found:
         # the issues tree sits beside generated/plt under the output root

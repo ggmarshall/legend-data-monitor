@@ -19,17 +19,12 @@ def _evt_file(path, n=600):
     vetoed = np.where(forced, rng.uniform(size=n) < 0.05, rng.uniform(size=n) < 0.8)
     # channel 0 participates in 60 % of vetoed events, channel 2 never
     coin = [
-        [
-            [bool(vetoed[i] and rng.uniform() < p)]
-            for p in (0.6, 0.4, 0.0)
-        ]
+        [[bool(vetoed[i] and rng.uniform() < p)] for p in (0.6, 0.4, 0.0)]
         for i in range(n)
     ]
     table = Table(
         {
-            "trigger": Table(
-                {"timestamp": Array(t), "is_forced": Array(forced)}
-            ),
+            "trigger": Table({"timestamp": Array(t), "is_forced": Array(forced)}),
             "coincident": Table(
                 {
                     "spms": Array(vetoed),
@@ -43,9 +38,13 @@ def _evt_file(path, n=600):
                     "energy_sum": Array(rng.exponential(30, n).astype("float32")),
                     "multiplicity": Array(rng.integers(1, 20, n).astype("int32")),
                     "first_t0": Array(
-                        np.where(rng.uniform(size=n) < 0.9, 1e4, np.nan).astype("float32")
+                        np.where(rng.uniform(size=n) < 0.9, 1e4, np.nan).astype(
+                            "float32"
+                        )
                     ),
-                    "geds_coincidence_classifier": Array(rng.normal(2, 1, n).astype("float32")),
+                    "geds_coincidence_classifier": Array(
+                        rng.normal(2, 1, n).astype("float32")
+                    ),
                     "is_trig_coin_pulse": VectorOfVectors(coin, dtype=bool),
                     "rawid": VectorOfVectors([RAWIDS] * n, dtype=np.uint32),
                 }
@@ -60,7 +59,11 @@ def test_lar_summary_keys(tmp_path):
     evt = _evt_file(tmp_path / "evt.lh5")
     out = tmp_path / "out"
     written = monitoring.write_lar_summary(
-        str(out), "p22", "r012", [evt], rawid_to_name={1064000: "S060", 1064001: "S061", 1056002: "S055"}
+        str(out),
+        "p22",
+        "r012",
+        [evt],
+        rawid_to_name={1064000: "S060", 1064001: "S061", 1056002: "S055"},
     )
     assert written == ["lar_veto/r012", "lar_occupancy/r012"]
     path = monitoring.period_contract_path(str(out), "p22")
@@ -84,7 +87,11 @@ def test_lar_thresholds_grade_period_keys(tmp_path):
     evt = _evt_file(tmp_path / "evt.lh5")
     root = tmp_path / "generated/plt/hit/phy"
     monitoring.write_lar_summary(
-        str(root), "p22", "r012", [evt], rawid_to_name={1064000: "S060", 1064001: "S061", 1056002: "S055"}
+        str(root),
+        "p22",
+        "r012",
+        [evt],
+        rawid_to_name={1064000: "S060", 1064001: "S061", 1056002: "S055"},
     )
     (root / "p22/r012").mkdir(parents=True)
     graded = monitoring.check_spms_thresholds(str(root), "p22", "r012")
