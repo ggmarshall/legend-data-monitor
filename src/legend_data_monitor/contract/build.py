@@ -207,6 +207,60 @@ def build_all_contract_files(generated_path: str, period: str, run: str, **kwarg
     return manifest
 
 
+def refresh_manifest(
+    generated_path: str,
+    period: str,
+    run: str,
+    data_type: str = "phy",
+    experiment: str = "l200",
+) -> str | None:
+    """
+    Re-inventory a run's manifest from the contract files on disk.
+
+    Writers that add keys *after* the contract build (the LAr summary, the
+    SiPM SPE spectra) leave the manifest's key list behind, so consumers that
+    trust the inventory never see them. This rebuilds every file entry from
+    what the files actually hold.
+
+    Parameters
+    ----------
+    generated_path : str
+        Output root (the directory containing ``generated/``).
+    period, run : str
+        Run whose manifest to refresh.
+    data_type : str
+        Data type of the run directory.
+    experiment : str
+        Experiment prefix in file names.
+
+    Returns
+    -------
+    str or None
+        The manifest path, or None when the run has no contract file.
+    """
+    run_dir = os.path.join(generated_path, "generated/plt/hit", data_type, period, run)
+    files = {}
+    for subsystem in schema.SUBSYSTEMS:
+        name = schema.run_file_name(
+            period, run, data_type, f"{subsystem}-schema2", experiment
+        )
+        path = os.path.join(run_dir, name)
+        if not os.path.exists(path):
+            continue
+        files[name] = {
+            "keys": sorted(_keys_in_file(path)),
+            "cadences": list(schema.CADENCES),
+        }
+    if not files:
+        return None
+
+    from .._version import version
+
+    return writer.write_manifest(
+        run_dir, period, run, files, package_version=version, experiment=experiment
+    )
+
+
 def _manifest_files(run_dir: str, period: str, run: str, experiment: str) -> dict:
     """File entries of the existing manifest whose contract files are still present."""
     import json

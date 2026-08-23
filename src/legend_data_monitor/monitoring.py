@@ -2025,6 +2025,7 @@ def write_lar_summary(
                     {"unit": unit, "label": param, "event_type": "IsPhysics"},
                 )
             )
+        _refresh_run_manifest(output_folder, period, run, data_type)
     return written
 
 
@@ -2036,6 +2037,21 @@ def write_lar_summary(
 #: locate the 1 p.e. centroid (a valid calibration puts it at exactly 1.0)
 SPE_BINS = 250
 SPE_RANGE = (0.0, 5.0)
+
+
+def _refresh_run_manifest(
+    output_folder: str, period: str, run: str, data_type: str
+) -> None:
+    """Re-inventory the run manifest after adding keys to a contract file."""
+    from .contract import build as contract_build
+
+    generated_path = output_folder.split("/generated/")[0]
+    try:
+        contract_build.refresh_manifest(
+            generated_path, period, run, data_type=data_type
+        )
+    except (OSError, KeyError) as exc:  # never lose the keys over the inventory
+        utils.logger.warning("could not refresh the manifest for %s: %s", run, exc)
 
 
 def read_spe_spectra(
@@ -2184,4 +2200,6 @@ def write_spe_spectrum(
                 },
             )
         )
+    if written:
+        _refresh_run_manifest(output_folder, period, run, data_type)
     return written

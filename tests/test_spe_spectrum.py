@@ -39,9 +39,7 @@ def _files(tmp_path, n=400, seed=3):
         table = Table(
             {
                 "energy_in_pe": VectorOfVectors(pulses, dtype=np.float32),
-                "is_valid_hit": VectorOfVectors(
-                    [[True, False]] * n, dtype=bool
-                ),
+                "is_valid_hit": VectorOfVectors([[True, False]] * n, dtype=bool),
             }
         )
         lh5.write(table, "hit", hit_path, group=f"ch{rawid}", wo_mode="append")
@@ -63,7 +61,9 @@ def test_spe_spectra_split_by_trigger_type(tmp_path):
     # each SiPM's peak sits at its own centroid: the gain drift is visible
     for name, centroid in (("S060", 1.0), ("S061", 0.9)):
         counts = hist[:, hist.axes[1].index(name)].view()
-        peak = hist.axes[0].centers[np.argmax(counts[int(0.6 / 0.02):]) + int(0.6 / 0.02)]
+        peak = hist.axes[0].centers[
+            np.argmax(counts[int(0.6 / 0.02) :]) + int(0.6 / 0.02)
+        ]
         assert peak == pytest.approx(centroid, abs=0.03)
 
 
@@ -81,9 +81,13 @@ def test_write_spe_spectrum_keys(tmp_path):
     run_dir = tmp_path / "p22" / "r012"
     run_dir.mkdir(parents=True)
     contract = str(run_dir / "l200-p22-r012-phy-spms-schema2.hdf")
-    writer.write_frame(contract, "detector_map", __import__("pandas").DataFrame(
-        [{"name": "S060", "rawid": 1064000}, {"name": "S061", "rawid": 1064001}]
-    ))
+    writer.write_frame(
+        contract,
+        "detector_map",
+        __import__("pandas").DataFrame(
+            [{"name": "S060", "rawid": 1064000}, {"name": "S061", "rawid": 1064001}]
+        ),
+    )
     written = monitoring.write_spe_spectrum(
         str(tmp_path), "p22", "r012", [hit], [evt], rawid_to_name=NAMES
     )
@@ -98,7 +102,9 @@ def test_write_spe_spectrum_keys(tmp_path):
 
 def test_write_spe_spectrum_without_contract(tmp_path):
     hit, evt, _ = _files(tmp_path)
-    assert monitoring.write_spe_spectrum(str(tmp_path), "p22", "r012", [hit], [evt]) == []
+    assert (
+        monitoring.write_spe_spectrum(str(tmp_path), "p22", "r012", [hit], [evt]) == []
+    )
 
 
 def test_spe_spectra_skip_misaligned_tiers(tmp_path, caplog):
@@ -106,7 +112,10 @@ def test_spe_spectra_skip_misaligned_tiers(tmp_path, caplog):
     short = Table(
         {
             "trigger": Table(
-                {"timestamp": Array(np.arange(5.0)), "is_forced": Array(np.zeros(5, bool))}
+                {
+                    "timestamp": Array(np.arange(5.0)),
+                    "is_forced": Array(np.zeros(5, bool)),
+                }
             )
         }
     )
@@ -115,3 +124,42 @@ def test_spe_spectra_skip_misaligned_tiers(tmp_path, caplog):
     hists = monitoring.read_spe_spectra([hit], [evt_short], NAMES)
     # the evt file for this key has a different row count: nothing is filled
     assert hists["IsBsln"].sum() == 0 and hists["IsPhysics"].sum() == 0
+
+
+def test_spe_keys_reach_the_manifest(tmp_path):
+    """Keys added after the contract build must show up in the inventory."""
+    import pandas as pd
+
+    from legend_data_monitor.contract import build
+    from legend_data_monitor.contract import reader as contract_reader
+
+    hit, evt, _ = _files(tmp_path)
+    root = tmp_path / "root"
+    run_dir = root / "generated/plt/hit/phy/p22/r012"
+    run_dir.mkdir(parents=True)
+    contract = str(run_dir / "l200-p22-r012-phy-spms-schema2.hdf")
+    writer.write_frame(
+        contract,
+        "detector_map",
+        pd.DataFrame([{"name": "S060", "rawid": 1064000}]),
+    )
+    # a manifest that predates the SPE pass
+    build.refresh_manifest(str(root), "p22", "r012")
+    before = contract_reader.read_manifest(str(run_dir), "p22", "r012")
+    assert before["files"]["l200-p22-r012-phy-spms-schema2.hdf"]["keys"] == [
+        "detector_map"
+    ]
+
+    monitoring.write_spe_spectrum(
+        str(root / "generated/plt/hit/phy"),
+        "p22",
+        "r012",
+        [hit],
+        [evt],
+        rawid_to_name=NAMES,
+    )
+    after = contract_reader.read_manifest(str(run_dir), "p22", "r012")
+    keys = after["files"]["l200-p22-r012-phy-spms-schema2.hdf"]["keys"]
+    assert "hist/IsBsln_EnergyInPe_dist2d" in keys
+    assert "hist/IsPhysics_EnergyInPe_dist2d" in keys
+    assert "detector_map" in keys
