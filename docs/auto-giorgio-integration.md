@@ -89,6 +89,15 @@ Per unattended invocation (`legend-data-monitor auto_run`):
   still reach `alert`. Two-sided metrics (`escale_FEP_pos`,
   `escale_SEP_residual`, `AoE_stab`, the SiPM bands) are unchanged: for those
   a departure in either direction is real.
+- **SiPM SPE spectra** (2026-08-23): `hist/<flag>_EnergyInPe_dist2d` in the
+  spms contract holds every pulse energy per SiPM (250 bins, 0-5 p.e.), for
+  forced triggers (`IsBsln`) and physics events (`IsPhysics`). A valid PE
+  calibration puts the 1 p.e. peak at exactly 1.0, so the centroid offset is
+  the gain drift. Pulses are **unmasked** (`is_valid_hit` not applied, as the
+  `selection` attr records) because the validity threshold sits below 1 p.e.;
+  consumers must therefore start any peak search above that channel's
+  `threshold_a` from `spms_calibration/<run>`, or the sub-threshold noise edge
+  is mistaken for the peak.
 - Exit codes: 0 all tasks ok; 1 ≥1 task failed (others still ran); 2
   config/environment error.
 

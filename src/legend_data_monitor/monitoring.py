@@ -1562,6 +1562,63 @@ def read_spms_noise(prod_path: str, period: str, run: str, data_type: str = "phy
     return frame.sort_index()
 
 
+def _spms_calibration_sources(overrides: str, validity: str, start_key: str) -> dict:
+    """
+    Map SiPM name -> the override file that last defined it at ``start_key``.
+
+    Replays ``validity.yaml`` the way the parameter database does
+    (reset/remove/append) and then, in that order, records which file each
+    SiPM was last seen in: an override touches only the channels it lists, so
+    a run's SiPMs are calibrated by a spread of files, not by the newest one.
+
+    Parameters
+    ----------
+    overrides : str
+        ``inputs/dataprod/overrides/hit`` directory.
+    validity : str
+        The ``validity.yaml`` inside it.
+    start_key : str
+        Timestamp key the run starts at.
+
+    Returns
+    -------
+    dict
+        SiPM name -> relative path of the override file that defines it.
+    """
+    with open(validity) as f:
+        entries = yaml.load(f, Loader=yaml.CLoader) or []
+    in_force: list = []
+    for entry in sorted(entries, key=lambda e: str(e.get("valid_from", ""))):
+        if str(entry.get("valid_from", "")) > start_key:
+            break
+        paths = [p for p in entry.get("apply", []) if p.startswith("lar/")]
+        mode = entry.get("mode")
+        if mode == "reset":
+            in_force = list(paths)
+        elif mode == "remove":
+            in_force = [p for p in in_force if p not in entry.get("apply", [])]
+        else:
+            in_force += paths
+
+    owner = {}
+    for path in in_force:
+        full = os.path.join(overrides, path)
+        if not os.path.exists(full):
+            # the file names carry a T% wildcard for the validity timestamp
+            candidates = sorted(
+                glob.glob(os.path.join(overrides, os.path.dirname(path), "*.yaml"))
+            )
+            if not candidates:
+                continue
+            full = candidates[0]
+        with open(full) as f:
+            pars = yaml.load(f, Loader=yaml.CLoader) or {}
+        for name in pars:
+            if name.startswith("S"):
+                owner[name] = path
+    return owner
+
+
 def read_spms_calibration(prod_path: str, start_key: str) -> pd.DataFrame:
     """
     Resolve the SiPM PE calibration (``energy_in_pe``/``is_valid_hit`` overrides) in force at ``start_key``.
@@ -1577,8 +1634,10 @@ def read_spms_calibration(prod_path: str, start_key: str) -> pd.DataFrame:
     -------
     pandas.DataFrame
         One row per SiPM: ``pe_a``, ``pe_m``, ``threshold_a`` and the
-        ``source`` override file (its period/run tell how stale the
-        calibration is); empty when no override resolves.
+        ``source`` override file **that last defined that SiPM** (its
+        period/run tell how stale its calibration is -- they differ per SiPM,
+        so the newest file in force says nothing about most of them); empty
+        when no override resolves.
     """
     from dbetto import TextDB
 
@@ -1586,17 +1645,7 @@ def read_spms_calibration(prod_path: str, start_key: str) -> pd.DataFrame:
     validity = os.path.join(overrides, "validity.yaml")
     if not os.path.exists(validity):
         return pd.DataFrame()
-    with open(validity) as f:
-        entries = yaml.load(f, Loader=yaml.CLoader) or []
-    sources = [
-        path
-        for entry in entries
-        if str(entry.get("valid_from", "")) <= start_key
-        and entry.get("mode") != "remove"
-        for path in entry.get("apply", [])
-        if path.startswith("lar/")
-    ]
-    source = sources[-1] if sources else None
+    owner = _spms_calibration_sources(overrides, validity, start_key)
     resolved = TextDB(overrides).on(timestamp=start_key)
     rows = {}
     for name in resolved.keys():
@@ -1607,7 +1656,7 @@ def read_spms_calibration(prod_path: str, start_key: str) -> pd.DataFrame:
             "pe_a": ops.get("energy_in_pe", {}).get("parameters", {}).get("a"),
             "pe_m": ops.get("energy_in_pe", {}).get("parameters", {}).get("m"),
             "threshold_a": ops.get("is_valid_hit", {}).get("parameters", {}).get("a"),
-            "source": source,
+            "source": owner.get(name),
         }
     if not rows:
         return pd.DataFrame()
@@ -1976,4 +2025,163 @@ def write_lar_summary(
                     {"unit": unit, "label": param, "event_type": "IsPhysics"},
                 )
             )
+    return written
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# SiPM single-photoelectron spectra (PE calibration validation)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#: per-pulse energy_in_pe histogram: 0-5 p.e. at 0.02 p.e./bin, fine enough to
+#: locate the 1 p.e. centroid (a valid calibration puts it at exactly 1.0)
+SPE_BINS = 250
+SPE_RANGE = (0.0, 5.0)
+
+
+def read_spe_spectra(
+    hit_files: list, evt_files: list, rawid_to_name: dict | None = None
+) -> dict:
+    """
+    Histogram every SiPM pulse energy, split by trigger type.
+
+    ``energy_in_pe = pe_a + pe_m * energy``, so a correct calibration puts the
+    1/2/3 p.e. peaks at exactly 1.0/2.0/3.0 and the 1 p.e. centroid offset is
+    the gain drift in p.e. units. Pulses are taken **unmasked** (without
+    ``is_valid_hit``): the threshold sits below 1 p.e., so masking clips the
+    low side of the very peak being measured. Forced triggers (the random
+    sample) give the cleanest single-photoelectron spectrum; physics events
+    are kept separately.
+
+    Parameters
+    ----------
+    hit_files : list
+        hit-tier LH5 files of the run.
+    evt_files : list
+        evt-tier files of the same run, for the forced-trigger flag; the
+        tiers are row-aligned per file.
+    rawid_to_name : dict, optional
+        SiPM rawid -> name for the category axis (rawids kept otherwise).
+
+    Returns
+    -------
+    dict
+        flag (``IsBsln``/``IsPhysics``) -> boost_histogram.Histogram
+        (Regular(energy) x StrCategory(SiPM)).
+    """
+    import awkward as ak
+    from lgdo import lh5
+
+    from .processing import binning
+
+    evt_by_key = {os.path.basename(f).split("-")[4]: f for f in evt_files}
+    hists = {
+        flag: binning.empty_distribution_2d(SPE_BINS, SPE_RANGE)
+        for flag in ("IsBsln", "IsPhysics")
+    }
+    channels = None
+    for path in hit_files:
+        key = os.path.basename(path).split("-")[4]
+        evt_path = evt_by_key.get(key)
+        if evt_path is None:
+            utils.logger.debug("no evt file for %s; skipping SPE fill", key)
+            continue
+        if channels is None:
+            names = set(rawid_to_name or {})
+            channels = [
+                c
+                for c in lh5.ls(path)
+                if c.startswith("ch")
+                and (not names or int(c[2:]) in (rawid_to_name or {}))
+            ]
+        forced = ak.to_numpy(
+            lh5.read_as(
+                "evt/", evt_path, library="ak", field_mask=["trigger/is_forced"]
+            ).trigger.is_forced
+        )
+        for channel in channels:
+            try:
+                pulses = lh5.read_as(
+                    f"{channel}/hit/",
+                    [path],
+                    library="ak",
+                    field_mask=["energy_in_pe"],
+                ).energy_in_pe
+            except (KeyError, ValueError, TypeError):
+                continue
+            if len(pulses) != len(forced):
+                utils.logger.warning(
+                    "%s: %d hit rows vs %d evt rows in %s; skipping SPE fill",
+                    channel,
+                    len(pulses),
+                    len(forced),
+                    key,
+                )
+                continue
+            name = (rawid_to_name or {}).get(int(channel[2:]), channel)
+            counts = ak.to_numpy(ak.num(pulses))
+            values = ak.to_numpy(ak.flatten(pulses))
+            per_pulse = np.repeat(forced, counts)
+            finite = np.isfinite(values)
+            for flag, mask in (("IsBsln", per_pulse), ("IsPhysics", ~per_pulse)):
+                selected = values[finite & mask]
+                if len(selected):
+                    hists[flag].fill(selected, name)
+    return hists
+
+
+def write_spe_spectrum(
+    output_folder: str,
+    period: str,
+    run: str,
+    hit_files: list,
+    evt_files: list,
+    rawid_to_name: dict | None = None,
+    data_type: str = "phy",
+) -> list:
+    """
+    Publish the per-SiPM single-photoelectron spectra to the run's spms contract.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring output root (the folder containing ``<period>/``).
+    period, run : str
+        Run to summarise.
+    hit_files, evt_files : list
+        hit- and evt-tier LH5 files of the run.
+    rawid_to_name : dict, optional
+        SiPM rawid -> name for the category axis.
+    data_type : str
+        Data type key of the contract file.
+
+    Returns
+    -------
+    list
+        Keys written (``hist/<flag>_EnergyInPe_dist2d``); empty when the run
+        has no spms contract file or no pulses.
+    """
+    contract = os.path.join(
+        output_folder, period, run, f"l200-{period}-{run}-{data_type}-spms-schema2.hdf"
+    )
+    if not os.path.isfile(contract):
+        utils.logger.warning("no spms contract at %s; no SPE spectra", contract)
+        return []
+    written = []
+    for flag, hist in read_spe_spectra(hit_files, evt_files, rawid_to_name).items():
+        if not hist.sum():
+            continue
+        written.append(
+            contract_writer.write_distribution_2d(
+                contract,
+                flag,
+                "EnergyInPe",
+                hist,
+                {
+                    "unit": "p.e.",
+                    "label": "Pulse energy",
+                    "event_type": flag,
+                    "selection": "all pulses (is_valid_hit not applied)",
+                },
+            )
+        )
     return written

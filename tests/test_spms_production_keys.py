@@ -33,16 +33,38 @@ def _mock_prod(tmp_path):
             }
         )
     )
+    (ovr / "lar/p15/r004").mkdir(parents=True)
+    (ovr / "lar/p15/r004/l200-p15-r004-lar-T%-par_hit-overwrite.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "S003": {
+                    "pars": {
+                        "operations": {
+                            "energy_in_pe": {"parameters": {"a": 0.01, "m": 0.6}},
+                            "is_valid_hit": {"parameters": {"a": 0.4}},
+                        }
+                    }
+                }
+            }
+        )
+    )
     (ovr / "validity.yaml").write_text(
         yaml.safe_dump(
             [
+                {
+                    "valid_from": "20240101T000000Z",
+                    "mode": "reset",
+                    "apply": [
+                        "lar/p15/r004/l200-p15-r004-lar-T%-par_hit-overwrite.yaml"
+                    ],
+                },
                 {
                     "valid_from": "20260116T191157Z",
                     "mode": "append",
                     "apply": [
                         "lar/p19/r005/l200-p19-r005-phy-lar-T%-par_hit-overwrite.yaml"
                     ],
-                }
+                },
             ]
         )
     )
@@ -74,3 +96,14 @@ def test_spms_production_keys_absent_inputs(tmp_path):
         == []
     )
     assert not os.path.exists(monitoring.period_contract_path(str(tmp_path), "p22"))
+
+
+def test_calibration_source_is_per_sipm(tmp_path):
+    """An override touches only the channels it lists, so sources differ per SiPM."""
+    prod = _mock_prod(tmp_path)
+    calib = monitoring.read_spms_calibration(prod, "20260731T181831Z")
+    # S002 is defined only by the newest file, S003 only by the p15 reset file
+    assert calib.loc["S002", "source"].startswith("lar/p19/r005/")
+    assert calib.loc["S003", "source"].startswith("lar/p15/r004/")
+    # values still come from the merged parameter database
+    assert calib.loc["S003", "pe_m"] == 0.6 and calib.loc["S002", "pe_m"] == 0.7

@@ -286,6 +286,22 @@ def auto_run(
         )
         utils.logger.info("...LAr summary keys written: %s", written)
 
+        # per-SiPM SPE spectra: validates the PE calibration in force (~5 min)
+        hit_dir = os.path.join(
+            auto_dir_path, "generated/tier/hit", data_type, period, run
+        )
+        hit_files = sorted(glob.glob(os.path.join(hit_dir, "*.lh5")))
+        written = monitoring.write_spe_spectrum(
+            phy_folder,
+            period,
+            run,
+            hit_files,
+            files,
+            rawid_to_name=names,
+            data_type=data_type,
+        )
+        utils.logger.info("...SPE spectrum keys written: %s", written)
+
     def task_strip_transport(logger=None):
         """Drop the v1 classifier pivots of the period's finished runs.
 
