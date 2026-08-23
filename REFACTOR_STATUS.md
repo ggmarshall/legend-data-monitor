@@ -394,6 +394,27 @@ the band -- recording `reference=0` for fractions whose floor is zero would fix
 it (and wants a re-grade to stay consistent). SiPM headline PNGs exist only for
 r012, so array records attach no plots elsewhere.
 
+## SiPM SPE spectra + manifest inventory (2026-08-23)
+
+- `hist/<flag>_EnergyInPe_dist2d` in every spms contract (`88effcd`): all 58
+  SiPMs' pulse energies, 250 bins over 0-5 p.e., forced triggers (`IsBsln`) and
+  physics (`IsPhysics`) separately. A separate pass (`monitoring.write_spe_spectrum`,
+  shaped like `write_lar_summary`) reads hit `energy_in_pe` + evt
+  `trigger/is_forced`, which are row-aligned per file -- 4 min/run against the
+  89-min build, so the whole p22 backfill took an hour. Pulses are unmasked on
+  purpose (the validity threshold sits below 1 p.e.), which means a peak search
+  must start above the channel's own `threshold_a`.
+- **Finding**: 1 p.e. centroids span 0.89-1.25 on r012 (11/58 off by >5 %, 5/58
+  by >10 %) -- real, previously unmonitored gain drift. The PE calibration in
+  force is a spread of eight override files from p15 to p19, **35 of 58 SiPMs
+  from p15/r004**; `read_spms_calibration` used to stamp them all with the
+  newest file, now fixed to resolve provenance per SiPM.
+- **Manifest inventory** (`a8dc122`): writers that add keys after the contract
+  build left them out of `manifest["files"][...]["keys"]`, so manifest-trusting
+  consumers were blind to the SPE keys *and* to the phase-S2 LAr `_dist` keys.
+  `contract.build.refresh_manifest()` re-inventories from the files, and both
+  post-build writers call it. All 14 p22 manifests rebuilt: 69 spms keys each.
+
 ## Remaining
 
 1. ~~**Pickled-figure shelve writers**~~ **DONE (2026-08-20)**, see above. Was:
