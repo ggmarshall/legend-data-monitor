@@ -207,13 +207,13 @@ def qc_distributions(
 
     classifier_rows = []
     with pd.HDFStore(my_file, "r") as store:
-        df_energy_IsPhysics = store["/IsPhysics_TrapemaxCtcCal"]
-        df_energy_IsPhysics = filter_series_by_ignore_keys(
-            df_energy_IsPhysics, utils.IGNORE_KEYS, period
-        )
+        # the mask must come from the *unfiltered* frame: load_and_filter loads
+        # its target unfiltered too, and pandas' where() needs both shapes to
+        # match. Every frame below is passed through the ignore-keys filter
+        # right after masking, so nothing survives that should have been dropped
+        mask = store["/IsPhysics_TrapemaxCtcCal"] > 25
 
         for par in pars_to_inspect:
-            mask = df_energy_IsPhysics > 25
             frames = {
                 "All": utils.load_and_filter(store, f"/All_{par}"),
                 "IsPulser": utils.load_and_filter(store, f"/IsPulser_{par}"),
@@ -1562,14 +1562,15 @@ def read_spms_noise(prod_path: str, period: str, run: str, data_type: str = "phy
     return frame.sort_index()
 
 
-def _spms_calibration_sources(overrides: str, validity: str, start_key: str) -> dict:
+def _spms_overrides_in_force(overrides: str, validity: str, start_key: str) -> list:
     """
-    Map SiPM name -> the override file that last defined it at ``start_key``.
+    Load the SiPM override files in force at ``start_key``, in merge order.
 
     Replays ``validity.yaml`` the way the parameter database does
-    (reset/remove/append) and then, in that order, records which file each
-    SiPM was last seen in: an override touches only the channels it lists, so
-    a run's SiPMs are calibrated by a spread of files, not by the newest one.
+    (reset/remove/append). Entries that point outside the overrides directory
+    -- the hit validity list references ``../raw/...`` files -- or that do not
+    parse to a mapping are skipped: they carry no SiPM calibration, and
+    following them is what made the database lookup raise on p16/p18.
 
     Parameters
     ----------
@@ -1582,8 +1583,8 @@ def _spms_calibration_sources(overrides: str, validity: str, start_key: str) -> 
 
     Returns
     -------
-    dict
-        SiPM name -> relative path of the override file that defines it.
+    list
+        ``(relative path, parsed mapping)`` pairs, in the order they apply.
     """
     with open(validity) as f:
         entries = yaml.load(f, Loader=yaml.CLoader) or []
@@ -1600,7 +1601,7 @@ def _spms_calibration_sources(overrides: str, validity: str, start_key: str) -> 
         else:
             in_force += paths
 
-    owner = {}
+    loaded = []
     for path in in_force:
         full = os.path.join(overrides, path)
         if not os.path.exists(full):
@@ -1612,11 +1613,20 @@ def _spms_calibration_sources(overrides: str, validity: str, start_key: str) -> 
                 continue
             full = candidates[0]
         with open(full) as f:
-            pars = yaml.load(f, Loader=yaml.CLoader) or {}
-        for name in pars:
-            if name.startswith("S"):
-                owner[name] = path
-    return owner
+            pars = yaml.load(f, Loader=yaml.CLoader)
+        if isinstance(pars, dict):
+            loaded.append((path, pars))
+    return loaded
+
+
+def _deep_update(base: dict, extra: dict) -> dict:
+    """Merge ``extra`` into ``base`` recursively; later values win."""
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_update(base[key], value)
+        else:
+            base[key] = value
+    return base
 
 
 def read_spms_calibration(prod_path: str, start_key: str) -> pd.DataFrame:
@@ -1639,19 +1649,26 @@ def read_spms_calibration(prod_path: str, start_key: str) -> pd.DataFrame:
         so the newest file in force says nothing about most of them); empty
         when no override resolves.
     """
-    from dbetto import TextDB
-
     overrides = os.path.join(prod_path, "inputs/dataprod/overrides/hit")
     validity = os.path.join(overrides, "validity.yaml")
     if not os.path.exists(validity):
         return pd.DataFrame()
-    owner = _spms_calibration_sources(overrides, validity, start_key)
-    resolved = TextDB(overrides).on(timestamp=start_key)
+    # an override touches only the channels it lists, so a run's SiPMs are
+    # calibrated by a spread of files: merge them in order (deeply -- a later
+    # file may supply only part of one channel's pars) and remember which file
+    # last defined each channel
+    merged: dict = {}
+    owner: dict = {}
+    for path, pars in _spms_overrides_in_force(overrides, validity, start_key):
+        for name, entry in pars.items():
+            if not str(name).startswith("S") or not isinstance(entry, dict):
+                continue
+            owner[name] = path
+            _deep_update(merged.setdefault(name, {}), entry)
+
     rows = {}
-    for name in resolved.keys():
-        if not name.startswith("S"):
-            continue
-        ops = resolved[name].get("pars", {}).get("operations", {})
+    for name, entry in merged.items():
+        ops = entry.get("pars", {}).get("operations", {})
         rows[name] = {
             "pe_a": ops.get("energy_in_pe", {}).get("parameters", {}).get("a"),
             "pe_m": ops.get("energy_in_pe", {}).get("parameters", {}).get("m"),
@@ -1700,7 +1717,15 @@ def write_spms_production_keys(
     if not noise.empty:
         written.append(contract_writer.write_frame(path, f"spms_noise/{run}", noise))
     if start_key is not None:
-        calib = read_spms_calibration(prod_path, start_key)
+        try:
+            calib = read_spms_calibration(prod_path, start_key)
+        except Exception as exc:  # noqa: BLE001 - auxiliary key, never fatal
+            # the geds output of this task is already complete; a malformed
+            # override tree must not fail the run (it did, with rc=1, on p16/p18)
+            utils.logger.warning(
+                "could not resolve the SiPM calibration for %s-%s: %s", period, run, exc
+            )
+            calib = pd.DataFrame()
         if not calib.empty:
             written.append(
                 contract_writer.write_frame(path, f"spms_calibration/{run}", calib)

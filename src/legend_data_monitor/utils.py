@@ -2133,14 +2133,54 @@ def get_vals(df, ch):
 
 
 def load_and_filter(store, key: str, mask=None):
-    """Load a given key from a HDF file and applies a mask."""
+    """
+    Load a given key from a HDF file and apply a mask.
+
+    The mask and its target come from the same v1 file and describe the same
+    events, so they line up by construction. When they do not -- a mask whose
+    index carries labels the target lacks makes the alignment ambiguous and
+    pandas raises ``putmask: mask and data must be the same size`` -- the cut
+    is applied by position if the shapes still match, and otherwise the key is
+    dropped with a warning: one malformed frame must not take down the whole
+    summary task (it did, on the p18 backfill).
+
+    Parameters
+    ----------
+    store : pandas.HDFStore
+        Open v1 monitoring file.
+    key : str
+        Key to load.
+    mask : pandas.DataFrame, optional
+        Boolean frame selecting the entries to keep.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The masked frame, empty when the key is absent or the mask cannot be
+        applied.
+    """
     if key not in store.keys():
         logger.debug(f"...key {key} not available. Skip it!")
         return pd.DataFrame()
     df = store[key]
-    if mask is not None:
-        df = df.where(mask)
-    return df
+    if mask is None:
+        return df
+    if df.index.equals(mask.index) and df.columns.equals(mask.columns):
+        return df.where(mask)
+    if df.shape == mask.shape:
+        logger.warning(
+            "...mask for %s does not share its target's index; applying by position",
+            key,
+        )
+        return df.where(mask.to_numpy())
+    logger.warning(
+        "...mask for %s does not fit the frame (%s vs %s); dropping the key rather "
+        "than reporting uncut values",
+        key,
+        mask.shape,
+        df.shape,
+    )
+    return pd.DataFrame()
 
 
 def load_yaml_or_default(path: str, detectors: dict) -> dict:
@@ -2366,7 +2406,14 @@ def build_detector_info_per_period(auto_dir_path: str, run_dict: dict, period: s
 
     for run in run_dict[period]:
         key = f"{period}-{run}"
-        start_key = get_start_key(auto_dir_path, "phy", period, run)
+        try:
+            start_key = get_start_key(auto_dir_path, "phy", period, run)
+        except (FileNotFoundError, ValueError) as exc:
+            # the run list comes from the cal par directory, which legitimately
+            # holds runs that never took physics data: they have no phy start
+            # key and simply contribute no channel map (downstream skips them)
+            logger.debug("...no start key for %s-%s: %s", period, run, exc)
+            continue
         chmap = lmeta.channelmap(start_key)
 
         for det, info in chmap.items():

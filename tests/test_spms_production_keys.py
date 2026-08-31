@@ -107,3 +107,79 @@ def test_calibration_source_is_per_sipm(tmp_path):
     assert calib.loc["S003", "source"].startswith("lar/p15/r004/")
     # values still come from the merged parameter database
     assert calib.loc["S003", "pe_m"] == 0.6 and calib.loc["S002", "pe_m"] == 0.7
+
+
+def test_calibration_ignores_out_of_root_validity_entries(tmp_path):
+    """The hit validity list references ../raw/... files that hold no SiPM pars.
+
+    Following them is what made the parameter-database lookup raise
+    ``TypeError: 'NoneType' object is not iterable`` on every p16/p18 run,
+    failing build_monitoring_hdf and so the whole run with rc=1.
+    """
+    prod = _mock_prod(tmp_path)
+    validity = tmp_path / "inputs/dataprod/overrides/hit/validity.yaml"
+    entries = yaml.safe_load(validity.read_text())
+    entries.append(
+        {
+            "valid_from": "20260201T000000Z",
+            "mode": "append",
+            "apply": [
+                "../raw/cal/p15/r002/l200-p15-r002-cal-T%-par_raw-overwrite.yaml",
+                "../raw/cal/p16/r000/l200-p16-r000-cal-T%-par_raw-overwrite.yaml",
+            ],
+        }
+    )
+    validity.write_text(yaml.safe_dump(entries))
+    calib = monitoring.read_spms_calibration(prod, "20260731T181831Z")
+    assert sorted(calib.index) == ["S002", "S003"]
+    assert calib.loc["S002", "pe_m"] == 0.7
+
+
+def test_calibration_merges_split_definitions_deeply(tmp_path):
+    """A later file may redefine only part of a channel's pars.
+
+    Real case: S054 and S087 on p22 take energy_in_pe from p15/r004 and
+    is_valid_hit from a later override; a shallow merge loses the gain.
+    """
+    prod = _mock_prod(tmp_path)
+    ovr = tmp_path / "inputs/dataprod/overrides/hit"
+    (ovr / "lar/p16/r000").mkdir(parents=True)
+    (ovr / "lar/p16/r000/l200-p16-r000-phy-lar-T%-par_hit-overwrite.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "S003": {
+                    "pars": {"operations": {"is_valid_hit": {"parameters": {"a": 0.9}}}}
+                }
+            }
+        )
+    )
+    validity = ovr / "validity.yaml"
+    entries = yaml.safe_load(validity.read_text())
+    entries.append(
+        {
+            "valid_from": "20250101T000000Z",
+            "mode": "append",
+            "apply": ["lar/p16/r000/l200-p16-r000-phy-lar-T%-par_hit-overwrite.yaml"],
+        }
+    )
+    validity.write_text(yaml.safe_dump(entries))
+    calib = monitoring.read_spms_calibration(prod, "20260731T181831Z")
+    # the newer file supplies the threshold, the older one still supplies the gain
+    assert calib.loc["S003", "threshold_a"] == 0.9
+    assert calib.loc["S003", "pe_m"] == 0.6
+    assert calib.loc["S003", "source"].startswith("lar/p16/r000/")
+
+
+def test_production_keys_survive_a_broken_override_tree(tmp_path, monkeypatch):
+    """A malformed override tree must not fail the task: geds output is done."""
+    prod = _mock_prod(tmp_path)
+
+    def boom(*args, **kwargs):
+        raise TypeError("'NoneType' object is not iterable")
+
+    monkeypatch.setattr(monitoring, "read_spms_calibration", boom)
+    out = tmp_path / "out"
+    keys = monitoring.write_spms_production_keys(
+        str(out), "p22", "r012", prod, start_key="20260731T181831Z"
+    )
+    assert keys == ["spms_noise/r012"]  # the noise key still lands
