@@ -229,6 +229,12 @@ def apply_remove_keys(df: pd.DataFrame, period: str, run: str) -> pd.DataFrame:
         if det not in out.columns:
             continue
         for entry in entries if isinstance(entries, list) else [entries]:
+            # an entry may be scoped to one period/run; skip the others (an
+            # unscoped time range would otherwise apply to every run)
+            if entry.get("period") not in (None, period):
+                continue
+            if entry.get("run") not in (None, run):
+                continue
             lo = (
                 pd.Timestamp(entry.get("from"), tz="UTC") if entry.get("from") else None
             )

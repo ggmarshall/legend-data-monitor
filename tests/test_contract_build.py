@@ -135,3 +135,44 @@ def test_keys_filter_refreshes_in_place(tmp_path):
     assert "IsPulser_BlMean_mean" in keys
     with h5py.File(v2, "r") as f:
         assert f["hist/IsPulser_BlMean/1min/storage/values"].dtype == np.float32
+
+
+def test_keyed_refresh_restores_a_missing_detector_map(tmp_path, monkeypatch):
+    """A keyed refresh must not leave a contract without /detector_map."""
+    from legend_data_monitor import utils
+
+    root, run_dir = _make_v1_file(tmp_path)
+    info = {
+        "detectors": {
+            "V01234A": {
+                "daq_rawid": 1104000,
+                "string": 1,
+                "position": 1,
+                "processable": True,
+                "usability": "on",
+                "mass_in_kg": 1.0,
+            },
+            "V05678B": {
+                "daq_rawid": 1104001,
+                "string": 1,
+                "position": 2,
+                "processable": True,
+                "usability": "on",
+                "mass_in_kg": 1.0,
+            },
+        }
+    }
+    monkeypatch.setattr(utils, "build_detector_info", lambda path: info)
+    build.build_contract_files(root, "p19", "r001", metadata_path="meta")
+    v2 = run_dir / "l200-p19-r001-phy-geds-schema2.hdf"
+    import h5py
+
+    with h5py.File(v2, "a") as f:
+        del f["detector_map"]  # simulate a file that lost the key
+    build.build_contract_files(
+        root, "p19", "r001", metadata_path="meta", keys=["IsPulser_Trapemax"]
+    )
+    assert isinstance(pd.read_hdf(v2, "detector_map"), pd.DataFrame)
+    manifest = reader.read_manifest(str(run_dir), "p19", "r001")
+    keys = manifest["files"]["l200-p19-r001-phy-geds-schema2.hdf"]["keys"]
+    assert "detector_map" in keys

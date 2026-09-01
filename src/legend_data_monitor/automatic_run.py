@@ -452,7 +452,7 @@ def render_run_plots(
     run_dir = os.path.join(files_folder, "generated/plt/hit", data_type, period, run)
     v2_file = os.path.join(run_dir, f"l200-{period}-{run}-{data_type}-geds-schema2.hdf")
     if not os.path.isfile(v2_file):
-        utils.logger.warning("no contract-v2 file to render PNGs from: %s", v2_file)
+        logger.warning("no contract-v2 file to render PNGs from: %s", v2_file)
         return []
     detector_map = pd.read_hdf(v2_file, "detector_map")
     saved = []
@@ -460,7 +460,7 @@ def render_run_plots(
         try:
             binned = contract_reader.read_binned_series(v2_file, flag, param, "10min")
         except KeyError:
-            utils.logger.debug("...no %s_%s in %s, skip PNG", flag, param, v2_file)
+            logger.debug("...no %s_%s in %s, skip PNG", flag, param, v2_file)
             continue
         for string, group in detector_map.groupby("string"):
             saved += contract_plots.plot_binned_series(

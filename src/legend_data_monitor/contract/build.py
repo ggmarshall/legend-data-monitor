@@ -163,7 +163,9 @@ def build_contract_files(
                     )
                 )
 
-    if detectors and keys is None:
+    if detectors:
+        # also on a keyed refresh: the map is tiny, and a file that lost it
+        # would otherwise stay incomplete (the repack below compacts the slack)
         written_keys.append(writer.write_detector_map(v2_file, detectors))
 
     if keys is not None:
