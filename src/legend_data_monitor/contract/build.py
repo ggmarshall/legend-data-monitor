@@ -25,21 +25,40 @@ def _camel(param: str) -> str:
     return "".join(word.capitalize() for word in param.split("_"))
 
 
+_AUX_RELATION = {
+    "_pulser01anaRatio": " / pulser01ana",
+    "_pulser01anaDiff": " - pulser01ana",
+}
+
+
 def _param_attrs(key: str) -> dict:
     """Best-effort unit/label/limits lookup for a v1 key name."""
     body = key.lstrip("/")
     flag, _, rest = body.partition("_")
-    for suffix in ("_pulser01anaDiff", "_pulser01anaRatio", "_var", "_mean"):
-        rest = rest.removesuffix(suffix) if rest.endswith(suffix) else rest
+    # peel suffixes to a fixed point: ``Baseline_pulser01anaRatio_var`` carries two
+    relation = ""
+    stripped = True
+    while stripped:
+        stripped = False
+        for suffix in ("_var", "_mean", *_AUX_RELATION):
+            if rest.endswith(suffix):
+                rest = rest.removesuffix(suffix)
+                relation = _AUX_RELATION.get(suffix, relation)
+                stripped = True
     camel_to_snake = {_camel(p): p for p in (settings.PLOT_INFO or {})}
     info = (settings.PLOT_INFO or {}).get(camel_to_snake.get(rest, ""), {})
+    is_var = body.endswith("_var")
+    label = info.get("label")
+    unit = info.get("unit")
+    if relation == _AUX_RELATION["_pulser01anaRatio"]:
+        unit = "a. u."  # a ratio of two ADC quantities is dimensionless
     attrs = {
-        "unit": info.get("unit"),
-        "label": info.get("label"),
+        "unit": "%" if is_var and info else unit,
+        "label": f"{label}{relation}" if label else None,
         "event_type": flag,
     }
     try:
-        keyword = "variation" if key.endswith("_var") else "absolute"
+        keyword = "variation" if is_var else "absolute"
         attrs["limits"] = info["limits"]["geds"][keyword]
     except (KeyError, TypeError):
         pass
@@ -53,6 +72,7 @@ def build_contract_files(
     metadata_path: str | None = None,
     data_type: str = "phy",
     experiment: str = "l200",
+    keys: list | None = None,
 ) -> str | None:
     """Produce the v2 contract file + manifest for one (period, run).
 
@@ -67,6 +87,9 @@ def build_contract_files(
         columns stay rawid-labelled strings when not given.
     data_type : str
         Data type (``phy``, ...).
+    keys : list, optional
+        v1 key bodies (e.g. ``IsPulser_BlMean``) to refresh in place; the rest
+        of an existing contract file is kept. Default rebuilds everything.
 
     Returns the manifest path, or None when the v1 input file is absent.
     """
@@ -86,14 +109,17 @@ def build_contract_files(
 
     v2_name = f"{experiment}-{period}-{run}-{data_type}-geds-schema2.hdf"
     v2_file = os.path.join(run_dir, v2_name)
-    if os.path.exists(v2_file):
+    if keys is None and os.path.exists(v2_file):
         os.remove(v2_file)
+    wanted = None if keys is None else {k.lstrip("/") for k in keys}
 
     written_keys = []
     with pd.HDFStore(v1_file, "r") as store:
         for key in sorted(store.keys()):
             if key.endswith(("_info",)):
                 continue  # replaced by per-key attrs + manifest vocabulary
+            if wanted is not None and key.lstrip("/") not in wanted:
+                continue
             frame = store[key]
             frame.columns = [rename.get(c, str(c)) for c in frame.columns]
             body = key.lstrip("/")
@@ -138,7 +164,17 @@ def build_contract_files(
                 )
 
     if detectors:
+        # also on a keyed refresh: the map is tiny, and a file that lost it
+        # would otherwise stay incomplete (the repack below compacts the slack)
         written_keys.append(writer.write_detector_map(v2_file, detectors))
+
+    if keys is not None:
+        # rewriting groups in place leaves their old blocks behind; compact, and
+        # list the manifest from what the file holds rather than this pass
+        from .. import repack
+
+        repack.repack_contract_hdf(v2_file)
+        written_keys = _keys_in_file(v2_file)
 
     from .._version import version
 
@@ -152,3 +188,21 @@ def build_contract_files(
     )
     utils.logger.info("v2 contract file written: %s", v2_file)
     return manifest_path
+
+
+def _keys_in_file(v2_file: str) -> list:
+    """Every manifest-worthy key a contract file holds (hist groups + frames)."""
+    import h5py
+
+    from . import reader
+
+    keys = reader.list_hist_keys(v2_file)
+    with h5py.File(v2_file, "r") as f:
+        keys += [
+            name
+            for name, obj in f.items()
+            if name != "hist"
+            and isinstance(obj, h5py.Group)
+            and "pandas_type" in obj.attrs
+        ]
+    return keys

@@ -29,7 +29,7 @@ def _read_frame(path, key, log, warn=True):
     """Read one contract key; None (with a log line) when it is missing."""
     try:
         return contract_reader.read_frame(path, key)
-    except (KeyError, FileNotFoundError) as exc:
+    except (KeyError, OSError) as exc:  # FileNotFoundError is an OSError
         (log.warning if warn else log.debug)(
             "missing contract key %s in %s (%s)", key, path, exc
         )
@@ -228,7 +228,7 @@ def _build_gain_shift_figure(
         f"period: {period} - string: {string} - position: {position} - ged: {detector}"
     )
     ax.set_ylabel(r"Energy diff / keV")
-    ax.plot([0, 1], [0, 1], "b", label=QBB_LIN_LABEL)  # legacy legend proxy
+    ax.plot([], [], "b", label=QBB_LIN_LABEL)  # legend proxy: empty, never autoscales
     if quadratic:
         ax.plot([1, 2], [1, 2], "dodgerblue", label=QBB_QUAD_LABEL)
     if t0:
@@ -296,7 +296,7 @@ def _build_param_figure(
             ax.plot(span, [-res0 / 2, -res0 / 2], color=info["colors"][1], ls="-")
             if not np.isnan(res0):
                 ax.text(t0, res0 / 2 * 1.1, f"{res0:.2f}", color=info["colors"][1])
-            ax.plot([0, 1], [0, 1], color=info["colors"][1], label=QBB_LIN_LABEL)
+            ax.plot([], [], color=info["colors"][1], label=QBB_LIN_LABEL)
         else:
             if threshold[1] is not None:
                 ax.plot(

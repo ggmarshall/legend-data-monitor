@@ -1,9 +1,9 @@
-output: /private/tmp/claude-501/-Users-georgemarshall-mock-prod-legend-monitor-dashboard/9c4a2f3d-3cfc-4ef5-b02c-21b48646045a/scratchpad/baseline_out
+output: /path/to/baseline_out  # edit: where the run writes
 dataset:
   experiment: L200
   period: p19
   version: ''
-  path: /Users/georgemarshall/mock_prod
+  path: /path/to/mock_prod  # edit: the mock production tree root
   type: phy
   runs: 1
 saving: overwrite

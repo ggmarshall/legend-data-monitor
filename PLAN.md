@@ -79,6 +79,14 @@ noted for upstream; muon/spm have no data).
 
 **STATUS: performance + Phase-5c pass verified** (2026-08-18): p22/r012 rerun clean against the golden snapshot — exit 0, **3 h 11 m (was 5 h 00 m)**, peak RSS **17.3 GB (was 24 GB)**, 196/200 v1 keys byte-identical and all contract keys/manifest identical. The 4 differing keys are a **pre-existing data-corruption bug now fixed**: the DataLoader path wrote uninitialised memory (denormals ~1.5e-319) for 6 detectors that lack `is_valid_bl_poly_rms_classifier`; the direct loader yields NaN. Worth raising with the collaboration — that garbage also reached the old dashboard. See REFACTOR_STATUS.md for detail.
 
+**STATUS: baseline parameters fixed (2026-08-20)**: `get_pivot` misread
+`bl_mean`/`pz_mean` as run means (one row per chunk) — root cause of the empty
+"Baseline Mean" dashboard view, present in production v1 too. Fixed with an
+explicit role per call site; aux/variation keys now carry attrs; `_dist`
+histograms percentile-ranged; new `repair_param` regenerates a parameter for
+finished runs in ~30 min; p22 r000-r013 repaired (see REFACTOR_STATUS.md).
+Dashboard-side y-range/menu bugs handed to the dashboard session.
+
 **STATUS: Phase 5c complete (2026-08-20)**: generators are data-only; every
 figure draws from the contract (`plots/{qc,summary,stability,calib}`, legacy
 shifter PDF names preserved verbatim); shelve/pickle deleted package-wide

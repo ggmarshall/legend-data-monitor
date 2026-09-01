@@ -138,3 +138,14 @@ def test_build_writes_classifier_dist2d(tmp_path):
             "storage/values"
         ][...]
         assert values.shape[0] == 78  # 76 bins + flow
+
+
+def test_fill_distribution_range_ignores_outliers():
+    rng = np.random.default_rng(0)
+    values = np.concatenate([rng.normal(0, 1, 10_000), [1e4]])
+    hist = binning.fill_distribution(values, n_bins=100)
+    lo, hi = hist.axes[0].edges[0], hist.axes[0].edges[-1]
+    assert -3.5 < lo < -2 and 2 < hi < 3.5  # the bulk, not the outlier
+    counts = hist.view(flow=True)
+    assert counts[-1] >= 1  # the outlier survives in the overflow bin
+    assert (counts[1:-1] > 0).sum() > 50  # and the bulk spans many bins

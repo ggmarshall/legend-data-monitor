@@ -331,6 +331,7 @@ def save_hdf(
                 f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}",
                 file_path.replace(plot_info_param["subsystem"], aux_ch),
                 saving,
+                kind="abs",
             )
             # ... mean values
             get_pivot(
@@ -339,6 +340,7 @@ def save_hdf(
                 f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}_mean",
                 file_path.replace(plot_info_param["subsystem"], aux_ch),
                 saving,
+                kind="mean",
             )
             # ... % variations wrt absolute values
             get_pivot(
@@ -347,6 +349,7 @@ def save_hdf(
                 f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}_var",
                 file_path.replace(plot_info_param["subsystem"], aux_ch),
                 saving,
+                kind="var",
             )
             utils.logger.info(
                 f"... HDF file for {aux_ch} - pure AUX values - saved in: \33[4m{file_path.replace(plot_info_param['subsystem'], aux_ch)}\33[0m"
@@ -378,6 +381,7 @@ def save_hdf(
                     f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}",
                     file_path,
                     saving,
+                    kind="abs",
                 )
             del df_to_save
         else:
@@ -388,6 +392,7 @@ def save_hdf(
                 f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}",
                 file_path,
                 saving,
+                kind="abs",
             )
             # ... mean values
             get_pivot(
@@ -396,6 +401,7 @@ def save_hdf(
                 f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}_mean",
                 file_path,
                 saving,
+                kind="mean",
             )
             # ... % variations wrt absolute values
             get_pivot(
@@ -404,6 +410,7 @@ def save_hdf(
                 f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}_var",
                 file_path,
                 saving,
+                kind="var",
             )
             del df_to_save
 
@@ -418,6 +425,7 @@ def save_hdf(
                     f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}_{aux_ch}Ratio",
                     file_path,
                     saving,
+                    kind="abs",
                 )
                 # ... mean values
                 get_pivot(
@@ -426,6 +434,7 @@ def save_hdf(
                     f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}_{aux_ch}Ratio_mean",
                     file_path,
                     saving,
+                    kind="mean",
                 )
                 # ... % variations wrt absolute values
                 get_pivot(
@@ -434,6 +443,7 @@ def save_hdf(
                     f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}_{aux_ch}Ratio_var",
                     file_path,
                     saving,
+                    kind="var",
                 )
                 del df_aux_ratio_to_save
 
@@ -448,6 +458,7 @@ def save_hdf(
                     f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}_{aux_ch}Diff",
                     file_path,
                     saving,
+                    kind="abs",
                 )
                 # ... mean values
                 get_pivot(
@@ -456,6 +467,7 @@ def save_hdf(
                     f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}_{aux_ch}Diff_mean",
                     file_path,
                     saving,
+                    kind="mean",
                 )
                 # ... % variations wrt absolute values
                 get_pivot(
@@ -464,6 +476,7 @@ def save_hdf(
                     f"{utils.FLAGS_RENAME[evt_type]}_{param_orig_camel}_{aux_ch}Diff_var",
                     file_path,
                     saving,
+                    kind="var",
                 )
                 del df_aux_diff_to_save
 
@@ -473,9 +486,38 @@ def save_hdf(
 
 
 def get_pivot(
-    df: DataFrame, parameter: str, key_name: str, file_path: str, saving: str
+    df: DataFrame,
+    parameter: str,
+    key_name: str,
+    file_path: str,
+    saving: str,
+    kind: str = "abs",
 ):
-    """Get pivot: datetimes (first column) vs channels (other columns)."""
+    """
+    Pivot one column to datetimes x channels and write it under ``key_name``.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Long frame with ``datetime``, ``channel`` and ``parameter`` columns.
+    parameter : str
+        Column to pivot.
+    key_name : str
+        HDF key to write.
+    file_path : str
+        HDF file to write to.
+    saving : str
+        ``"append"`` to merge with what the file already holds, else overwrite.
+    kind : str
+        What the column is, which decides how appends merge: ``"abs"`` rows
+        accumulate, ``"mean"`` (one row, constant over the run) is replaced by
+        the newest value, ``"var"`` (% variation from the mean) is recomputed
+        over the whole absolute history with that newest mean. This used to be
+        guessed from ``parameter``'s name, which misread ``bl_mean`` and
+        ``pz_mean`` as run means and truncated them to one row per chunk.
+    """
+    if kind not in ("abs", "mean", "var"):
+        raise ValueError(f"get_pivot: unknown kind {kind!r}")
     df_pivot = df.pivot(index="datetime", columns="channel", values=parameter)
     # the frame is loaded as float32, but the mean/variation arithmetic widens
     # it again; store what we mean to store rather than what pandas inferred
@@ -483,82 +525,43 @@ def get_pivot(
         df_pivot = df_pivot.astype(
             {c: "float32" for c in df_pivot.columns if df_pivot[c].dtype == "float64"}
         )
-    # just select one row for mean values (since mean is constant over time for a given channel)
-    # take into consideration parameters that are named with 'mean' in it, eg "bl_mean"
-    if ("_mean" in parameter and parameter.count("mean") > 1) or (
-        "mean" in parameter.split("_")[-1] and "mean" not in parameter.split("_")[:-1]
-    ):
-        df_pivot = df_pivot.iloc[[0]]
+    if kind == "mean":
+        df_pivot = df_pivot.iloc[[0]]  # constant over the run: one row suffices
 
-    # append new data
-    if saving == "append":
-        # check if the file exists: if not, create a new one
-        if not os.path.exists(file_path):
-            df_pivot.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
-            return
-        # the file exists, but this specific key was not saved - create the new key
-        saved_keys = []
+    if saving != "append":
+        df_pivot.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
+        return
+
+    saved_keys = []
+    if os.path.exists(file_path):
         with h5py.File(file_path, "r") as file:
             saved_keys = list(file.keys())
-        if os.path.exists(file_path) and key_name not in saved_keys:
-            df_pivot.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
-            return
-
-        mean_pars = ["bl_mean", "pz_mean"]
-        if (
-            "_mean" in parameter
-            and parameter.count("mean") == 1
-            and parameter not in mean_pars
-        ) or (parameter in mean_pars and parameter.count("mean") == 2):
-            # for the mean entry, we overwrite the already existing content with the new mean value
-            df_pivot.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
-
-        if "_mean" not in parameter or (
-            "_mean" in parameter
-            and parameter in mean_pars
-            and parameter.count("mean") == 1
-        ):
-            # if % variations, we have to re-calculate all of them for the new mean values
-            if "_var" in parameter:
-                key_name_orig = key_name.replace("_var", "")
-                new_mean = read_hdf(
-                    file_path, key=key_name_orig + "_mean"
-                )  # gia' aggiornata (perche' la media la aggiorniamo prima delle variazioni %)
-                new_var_data = read_hdf(
-                    file_path, key=key_name_orig
-                )  # df vecchio con TUTTI i valori assoluti (anche quelli di prima)
-
-                # recompute % variations for all channels at once (column-aligned).
-                # Overwriting the freshly-read frame in place saves a full copy
-                # of the largest object in the run (a classifier key is ~0.5 GB
-                # per 10 files, and this is the peak of the whole pipeline).
-                channels = list(df["channel"].unique())
-                new_var_data[channels] = (
-                    new_var_data[channels].div(new_mean.iloc[0][channels]) - 1
-                ) * 100
-
-                # Write the combined DataFrame to the HDF5 file
-                new_var_data.to_hdf(
-                    file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION
-                )
-
-            # otherwise, just read the existing HDF5 file
-            else:
-                # Read the existing HDF5 file
-                existing_data = read_hdf(file_path, key=key_name)
-                # Concatenate the existing data and the new data
-                combined_data = concat([existing_data, df_pivot])
-                # the concat already copied both inputs: holding them across
-                # the write would keep three copies of the key alive at once
-                del existing_data
-                # Write the combined DataFrame to the HDF5 file
-                combined_data.to_hdf(
-                    file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION
-                )
-
-    # overwrite already existing data
-    else:
+    if key_name not in saved_keys or kind == "mean":
+        # first chunk, or the run mean: the newest value replaces what is there
         df_pivot.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
+        return
+
+    if kind == "var":
+        # the mean was just refreshed (means are written before variations):
+        # recompute the % variation over the whole absolute history
+        key_name_orig = key_name.removesuffix("_var")
+        new_mean = read_hdf(file_path, key=key_name_orig + "_mean")
+        new_var_data = read_hdf(file_path, key=key_name_orig)
+        # overwrite the freshly-read frame in place: one copy of the largest
+        # object in the run, not two (this is the peak of the whole pipeline)
+        channels = list(df["channel"].unique())
+        new_var_data[channels] = (
+            new_var_data[channels].div(new_mean.iloc[0][channels]) - 1
+        ) * 100
+        new_var_data.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
+        return
+
+    existing_data = read_hdf(file_path, key=key_name)
+    combined_data = concat([existing_data, df_pivot])
+    # the concat already copied both inputs: holding them across the write
+    # would keep three copies of the key alive at once
+    del existing_data
+    combined_data.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
 
 
 def check_existence_and_overwrite(file: str):

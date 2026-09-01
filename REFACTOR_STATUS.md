@@ -244,6 +244,39 @@ PDFs across all families with **zero shelve files**, and the resulting
 `qcp_summary.yaml` matches the production-era r012 file on **899/899
 verdicts**. 329 tests green (+4 pre-existing failures), pre-commit clean.
 
+## Baseline parameters: the bl_mean pivots were never whole (2026-08-20)
+
+The dashboard's "Baseline Mean" view was empty because `IsPulser_BlMean`
+really was: 4 one-minute bins for a week of data, its `_var` on a different
+13 h axis. `save_data.get_pivot` decided whether a pivot was the absolute
+values, the run mean or the % variation by **substring-matching `mean`/`var`
+in the parameter name**, so `bl_mean` (and `pz_mean`) were treated as run
+means: truncated to one row per chunk, `_var` overwritten per chunk instead
+of recomputed, `_mean` never refreshed. Production v1 has carried this since
+the heuristic was written (22 rows vs 38 619 for Baseline on p22/r012); the
+contract build reproduced it faithfully. The role is now passed explicitly
+(`kind="abs"|"mean"|"var"`) by every call site; the new test fails on the
+old code for `bl_mean`/`pz_mean` and passes for `baseline`.
+
+Found on the same trail and fixed: `contract/build._param_attrs` peeled one
+suffix only, so every `*_pulser01ana{Ratio,Diff}_var` group shipped without
+`label`/`unit`; `fill_distribution` ranged on min/max, so one 3000 ADC noise
+burst put all of `BlStd_dist` into a single bin (now 0.5-99.5 percentiles,
+flow bins keep the rest).
+
+`legend-data-monitor repair_param` regenerates one parameter for finished
+runs without the 3 h pipeline: it replays the parameter's config entries over
+the run's recorded chunk lists into a scratch tree, transplants the keys into
+the v1 files (geds + pulser01ana) and refreshes just those keys in the contract
+(`build_contract_files(keys=)`, compacting afterwards). ~30 min per run; p22
+r000-r013 repaired this way. Verified on r012: BlMean now 29 127 rows on the
+same axis as Baseline, 575 781 populated contract bins for both.
+
+Dashboard-side causes (Noise y-axis pinned to ±150 against 9-47 ADC data,
+fixed ranges clipping the min/max envelope, the dead `IsBsln_<param>` menu
+branch, `_uncamel` not inverting the producer's camel-caser) were handed to
+the dashboard session with file:line references.
+
 ## Remaining
 
 1. ~~**Pickled-figure shelve writers**~~ **DONE (2026-08-20)**, see above. Was:
@@ -255,10 +288,21 @@ verdicts**. 329 tests green (+4 pre-existing failures), pre-commit clean.
    `plots/`; then delete `shelve`/`pickle.dumps` package-wide. Blocked on real/cal
    test data (mock tree has none) — build against a production tree or extend the
    mock tree with cal fixtures first.
-2. **Excursion wiring**: threshold evaluations feeding `qcp_summary.yaml` should call
-   `issues.evaluate_excursion` on the binned series so issue payloads carry the
-   spurious-vs-persistent stats (currently issues are emitted from the qcp booleans).
-3. **slow_control** output under the contract.
+2. ~~**Excursion wiring**~~ **DONE (2026-08-21, 94f7c81)**: every producer
+   stashes its magnitudes; excursions where a real time series exists
+   (pulser/baseline, qc rates, FEP bins), scalars elsewhere; phy issues emitted
+   once by a final `phy_issues` task (the qc-rate verdicts never reached the
+   emitter before). On p22/r012 cal issues went from 0 magnitude fields to
+   24/26 and 7 now grade `alert` on distance past the band — including
+   *improved* resolutions (symmetric bands); open question whether resolution
+   metrics should grade one-sided.
+3. ~~**slow_control** output under the contract~~ **DONE (2026-08-21, d9c2bbd)**:
+   retrieval never worked (the diode-info merge ate every rack/clean-room
+   row, so no SC file was ever written anywhere, production included); fixed,
+   and each (parameter, run) is published as `slow_control/<param>/<run>` in
+   the period contract file (UTC DatetimeIndex, value/unit/limits).
+   Live-verified on p22/r012 (8 parameters, 1-9 k readings each); dashboard
+   overlay reader change handed to the dashboard session.
 4. **Retire v1 writer** (`save_data.save_hdf` pivots) once the dashboard reads v2 —
    then drop the `-schema2` infix and the plotting→save_hdf coupling disappears with it.
 5. ~~**Phase 6 — dashboard phy migration**~~ **DONE (2026-08-11)**: the dashboard

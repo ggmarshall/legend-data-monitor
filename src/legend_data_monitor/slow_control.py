@@ -114,8 +114,10 @@ class SlowControl:
         elif "imon" in self.parameter and "vmon" in list(get_table_df.columns):
             get_table_df = get_table_df.drop(columns="vmon")
             get_table_df = get_table_df.rename(columns={"imon": "value"})
-        # in case of geds parameters, add the info about the channel name and channel id (right now, there is only crate&slot info)
-        else:
+        # diode tables carry crate/slot/channel: resolve them to detector names.
+        # Rack and clean-room tables have none of that, and the merge would
+        # drop every row -- which is why no SC file was ever written
+        elif {"crate", "slot", "channel"} <= set(get_table_df.columns):
             get_table_df = include_more_diode_info(get_table_df, self.scdb)
 
         # order by timestamp (not automatically done)
