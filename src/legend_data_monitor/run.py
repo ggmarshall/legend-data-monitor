@@ -39,6 +39,7 @@ def main():
     add_user_rsync_parser(subparsers)
     add_auto_prod_parser(subparsers)
     add_auto_run_parser(subparsers)
+    add_plot_run_parser(subparsers)
     add_get_exposure(subparsers)
     add_get_runinfo(subparsers)
 
@@ -288,6 +289,22 @@ def add_auto_run_parser(subparsers):
         default=False,
         help="True if you want to save pdf files too; default: False",
     )
+    parser_auto_run.add_argument(
+        "--write-shelves",
+        dest="write_shelves",
+        default="on",
+        choices=["on", "off"],
+        help="Write the legacy pickled-figure shelve files consumed by the old "
+        "dashboard ('off' keeps only the contract data). Default: on.",
+    )
+    parser_auto_run.add_argument(
+        "--plots",
+        default="on",
+        choices=["on", "off"],
+        help="Render subsystem plots ('off' produces the monitoring data only, "
+        "roughly 40%% faster; regenerate figures later from the contract file). "
+        "Default: on.",
+    )
 
     parser_auto_run.set_defaults(func=auto_run_cli)
 
@@ -325,7 +342,46 @@ def auto_run_cli(args):
         escale_val,
         data_type,
         prod_root=args.prod_root,
+        render_plots=args.plots == "on",
+        write_shelves=args.write_shelves == "on",
     )
+
+
+def add_plot_run_parser(subparsers):
+    """Configure the ``plot_run`` command line interface."""
+    parser_plot_run = subparsers.add_parser(
+        "plot_run",
+        description="""Render monitoring figures for one run from an already
+        produced output tree. Reads only the contract-v2 file, so it needs no
+        access to the production data and takes seconds; use it to regenerate
+        figures for a run processed with --plots off.""",
+    )
+    parser_plot_run.add_argument(
+        "--output_folder",
+        required=True,
+        help="Output root of a previous run (the folder containing 'generated').",
+    )
+    parser_plot_run.add_argument("--p", required=True, help="Period to render, eg p22.")
+    parser_plot_run.add_argument("--r", required=True, help="Run to render, eg r012.")
+    parser_plot_run.add_argument(
+        "--data_type",
+        default="phy",
+        help="Data type to render. Default: 'phy'.",
+    )
+    parser_plot_run.set_defaults(func=plot_run_cli)
+
+
+def plot_run_cli(args):
+    """Render a run's figures from its contract file."""
+    from . import automatic_run
+
+    saved = automatic_run.render_run_plots(
+        args.output_folder, args.p, args.r, args.data_type
+    )
+    utils.logger.info(
+        "rendered %d figure(s) for %s-%s", len(saved), args.p, args.r
+    )
+    return 0 if saved else 1
 
 
 def add_get_exposure(subparsers):

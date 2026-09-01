@@ -87,6 +87,8 @@ def write_distribution(
 
 def write_frame(file_path: str, key: str, frame: pd.DataFrame) -> str:
     """Write a small pandas frame (run means, detector map, calib pars)."""
+    # same courtesy as write_hist: the period directory may not exist yet
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     frame.to_hdf(file_path, key=key, mode="a")
     with h5py.File(file_path, "a") as f:
         f.attrs[schema.ROOT_ATTR] = schema.SCHEMA_VERSION

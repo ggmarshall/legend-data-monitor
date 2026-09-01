@@ -212,7 +212,12 @@ def control_plots(user_config_path: str, n_files=None):
 
 
 def auto_control_plots(
-    config: str, file_keys: str, prod_path: str, prod_config: str, n_files=None
+    config: str,
+    file_keys: str,
+    prod_path: str,
+    prod_config: str,
+    n_files=None,
+    render: bool = True,
 ):
     """Set the configuration file and the output paths when a config file is provided during automathic plot production."""
     # -------------------------------------------------------------------------
@@ -236,10 +241,10 @@ def auto_control_plots(
     plt_path = utils.get_output_path(config)
 
     # plot
-    generate_plots(config, plt_path, n_files)
+    generate_plots(config, plt_path, n_files, render=render)
 
 
-def generate_plots(config: dict, plt_path: str, n_files=None):
+def generate_plots(config: dict, plt_path: str, n_files=None, render: bool = True):
     """Generate plots once the config file is set and once we provide the path and name in which store results. n_files specifies if we want to inspect the entire time window (if n_files is not specified), otherwise we subdivide the time window in smaller datasets, each one being composed by n_files files."""
     # no subdivision of data (useful when the inspected time window is short enough)
     if n_files is None:
@@ -262,7 +267,7 @@ def generate_plots(config: dict, plt_path: str, n_files=None):
             )
             raise errors.MonitoringError("generate_plots failed (see log for details)")
         # do the plots
-        make_plots(config, plt_path, config["saving"])
+        make_plots(config, plt_path, config["saving"], render=render)
 
     # for subdivision of data, let's loop over lists of timestamps, each one of length n_files
     else:
@@ -291,10 +296,10 @@ def generate_plots(config: dict, plt_path: str, n_files=None):
             # get the dataset
             config["dataset"]["timestamps"] = bunch
             # make the plots / load data for the dataset of interest
-            make_plots(config.copy(), plt_path, config["saving"])
+            make_plots(config.copy(), plt_path, config["saving"], render=render)
 
 
-def make_plots(config: dict, plt_path: str, saving: str):
+def make_plots(config: dict, plt_path: str, saving: str, render: bool = True):
 
     # -------------------------------------------------------------------------
     # set up log file for each system
@@ -384,6 +389,7 @@ def make_plots(config: dict, plt_path: str, saving: str):
             config["dataset"],
             plt_path,
             saving,
+            render=render,
         )
 
         # -------------------------------------------------------------------------
