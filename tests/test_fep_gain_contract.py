@@ -6,7 +6,6 @@ now carries them.
 """
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from legend_data_monitor import calibration
@@ -18,7 +17,9 @@ def _series(n_bins=4, per_bin=10, drift_per_bin=0.0, bin_size=600):
     timestamps, values = [], []
     for b in range(n_bins):
         # place entries inside bin b, away from the edges
-        timestamps += list(np.linspace(b * bin_size + 1, (b + 1) * bin_size - 1, per_bin))
+        timestamps += list(
+            np.linspace(b * bin_size + 1, (b + 1) * bin_size - 1, per_bin)
+        )
         values += [2614.5 + b * drift_per_bin] * per_bin
     return np.array(timestamps, dtype=float), np.array(values, dtype=float)
 
@@ -117,3 +118,42 @@ def test_render_false_returns_the_same_numbers_without_drawing(tmp_path):
         computed_norender["stats"]["mean"].tolist()
     )
     plt.close("all")
+
+
+# -------------------------------------------------------------------------
+# dataflow stability arrays (opt-in fast path, not usable yet)
+# -------------------------------------------------------------------------
+
+
+def test_dataflow_stability_usable_requires_populated_bins():
+    from legend_data_monitor import calibration as cal
+
+    nan = float("nan")
+    # what prod-blind auto/v2.0.0 actually ships: 180 s slices, nearly all empty
+    sparse = {"time": np.arange(87.0), "energy": np.array([2614.0] + [nan] * 86)}
+    assert cal.dataflow_stability_usable(sparse) is False
+    # what it should look like once dataflow bins coarsely enough
+    good = {"time": np.arange(10.0), "energy": np.full(10, 2614.0)}
+    assert cal.dataflow_stability_usable(good) is True
+
+
+def test_dataflow_stability_usable_handles_missing_input():
+    from legend_data_monitor import calibration as cal
+
+    assert cal.dataflow_stability_usable(None) is False
+    assert cal.dataflow_stability_usable({}) is False
+    assert cal.dataflow_stability_usable({"time": np.arange(3.0)}) is False
+
+
+def test_dataflow_stability_threshold_is_tunable():
+    from legend_data_monitor import calibration as cal
+
+    arrays = {"time": np.arange(3.0), "energy": np.full(3, 2614.0)}
+    assert cal.dataflow_stability_usable(arrays, min_bins=3) is True
+    assert cal.dataflow_stability_usable(arrays, min_bins=4) is False
+
+
+def test_read_dataflow_stability_returns_none_without_a_shelve(tmp_path):
+    from legend_data_monitor import calibration as cal
+
+    assert cal.read_dataflow_stability(str(tmp_path), "p22", "r012", "V01234A") is None

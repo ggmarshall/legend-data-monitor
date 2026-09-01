@@ -40,6 +40,7 @@ def main():
     add_auto_prod_parser(subparsers)
     add_auto_run_parser(subparsers)
     add_plot_run_parser(subparsers)
+    add_repack_parser(subparsers)
     add_get_exposure(subparsers)
     add_get_runinfo(subparsers)
 
@@ -378,10 +379,74 @@ def plot_run_cli(args):
     saved = automatic_run.render_run_plots(
         args.output_folder, args.p, args.r, args.data_type
     )
-    utils.logger.info(
+    legend_data_monitor.utils.logger.info(
         "rendered %d figure(s) for %s-%s", len(saved), args.p, args.r
     )
     return 0 if saved else 1
+
+
+def add_repack_parser(subparsers):
+    """Configure :func:`.repack.repack_run` command line interface."""
+    parser_repack = subparsers.add_parser(
+        "repack",
+        description="""Rewrite an already-produced run's HDF outputs in the
+        current on-disk layout: float32 + compression for the v1 pandas
+        files, narrowed histogram storage for the contract (schema2) files.
+        Runs produced before that layout carry roughly 7x the disk they need;
+        repacking takes minutes where regenerating takes hours. The rewrite
+        is atomic per file and never replaces a file it did not manage to
+        shrink.""",
+    )
+    parser_repack.add_argument(
+        "--output_folder",
+        required=True,
+        help="Output root of a previous run (the folder containing 'generated').",
+    )
+    parser_repack.add_argument("--p", required=True, help="Period to repack, eg p22.")
+    parser_repack.add_argument(
+        "--r", required=True, nargs="+", help="Run(s) to repack, eg r012."
+    )
+    parser_repack.add_argument(
+        "--data_type", default="phy", help="Data type to repack. Default: 'phy'."
+    )
+    parser_repack.add_argument(
+        "--strip-classifiers",
+        action="store_true",
+        help="""Also drop the QC classifier pivots from the v1 file (~1.6 GB
+        of a 2.2 GB run). Refuses unless the contract file already carries
+        every binned classifier key being removed.""",
+    )
+    parser_repack.set_defaults(func=repack_cli)
+
+
+def repack_cli(args):
+    """Repack one or more runs' v1 files."""
+    from . import repack
+
+    before = after = 0
+    for run in args.r:
+        for sizes in repack.repack_run(
+            args.output_folder, args.p, run, args.data_type
+        ).values():
+            before += sizes[0]
+            after += sizes[1]
+        if args.strip_classifiers:
+            stripped_before, stripped_after = repack.strip_classifier_pivots(
+                args.output_folder, args.p, run, args.data_type
+            )
+            # repack_run already counted this file at its pre-strip size;
+            # fold in only the further reduction the strip achieved
+            after -= stripped_before - stripped_after
+    if not before:
+        legend_data_monitor.utils.logger.warning("no v1 files found to repack")
+        return 1
+    legend_data_monitor.utils.logger.info(
+        "repacked %.2f GB -> %.2f GB (%.1fx)",
+        before / 2**30,
+        after / 2**30,
+        before / max(after, 1),
+    )
+    return 0
 
 
 def add_get_exposure(subparsers):

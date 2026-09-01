@@ -15,6 +15,110 @@ list_of_str = list[str]
 tuple_of_str = tuple[str]
 
 
+#: cache of loaded aux subsystems, keyed by (channel, dataset) -- deliberately
+#: NOT by parameter. include_aux is called once per configured plot and each
+#: plot asks for a different parameter, so a per-parameter key never hits (18
+#: pulser01ana loads over 3 chunks, 0 reuses, measured on p22/r012). Loading
+#: the union of the parameters up front makes one pass over the files serve
+#: them all.
+_AUX_CACHE: dict = {}
+
+
+def _aux_cache_key(aux_channel, dataset):
+    time_key = dataset.get("timestamps") or dataset.get("runs") or dataset.get("start")
+    if isinstance(time_key, list):
+        time_key = tuple(time_key)
+    return (
+        aux_channel,
+        dataset.get("period"),
+        dataset.get("version"),
+        dataset.get("type"),
+        time_key,
+    )
+
+
+def prewarm_aux(aux_channel, dataset, params) -> None:
+    """Load the aux channel once with every parameter the config will ask for.
+
+    Called before the per-plot loop; each later include_aux then finds its
+    column already loaded instead of re-reading the tier.
+    """
+    params = [p for p in dict.fromkeys(params) if isinstance(p, str)]
+    # mirror the skips in include_aux: special parameters, the quality-cut
+    # pseudo-parameters and hit-tier parameters never reach the aux merge
+    params = [
+        p
+        for p in params
+        if p not in utils.SPECIAL_PARAMETERS
+        and p
+        not in (
+            "quality_cuts",
+            "geds/quality/is_not_bb_like/is_delayed_discharge",
+            "geds/quality/is_bb_like",
+        )
+        and utils.PARAMETER_TIERS.get(p) != "hit"
+    ]
+    if not params:
+        return
+    key = _aux_cache_key(aux_channel, dataset)
+    if key in _AUX_CACHE:
+        return
+    utils.logger.debug(
+        "...... pre-loading %s with %d parameter(s)", aux_channel, len(params)
+    )
+    aux_subsys = Subsystem(aux_channel, dataset=dataset)
+    aux_subsys.get_data(params)
+    _AUX_CACHE[key] = aux_subsys
+
+
+def _aux_subsystem(aux_channel, dataset, param):
+    """Return the aux channel carrying ``param``, loading it only if needed."""
+    key = _aux_cache_key(aux_channel, dataset)
+    cached = _AUX_CACHE.get(key)
+    if cached is not None and param in getattr(cached, "data", ()):
+        utils.logger.debug("...... reusing cached %s data", aux_channel)
+        return cached
+
+    aux_subsys = Subsystem(aux_channel, dataset=dataset)
+    # get data for these parameters and time range given in the dataset
+    # (if no parameters given to plot, baseline and wfmax will always be loaded to flag pulser events anyway)
+    aux_subsys.get_data(param)
+    if cached is None:
+        _AUX_CACHE[key] = aux_subsys
+    return aux_subsys
+
+
+def clear_aux_cache() -> None:
+    """Drop cached aux subsystems (between chunks/runs, and in tests)."""
+    _AUX_CACHE.clear()
+
+
+def compact_channel_map_columns(df, columns):
+    """Shrink per-channel metadata joined onto every event row.
+
+    The channel map contributes constants (detector name, string, position,
+    HV card, CC4 id, ...) that get repeated once per event. Left as object
+    columns they dominate the frame: on a 5-file p22 load they were 85 % of
+    446 MB, against 3.6 % for the parameters themselves. Numeric columns are
+    downcast and the rest become categoricals, which is ~13x smaller with
+    identical values.
+    """
+    for col in columns:
+        if col not in df.columns:
+            continue
+        series = df[col]
+        if series.dtype != object and str(series.dtype) != "str":
+            continue
+        numeric = pd.to_numeric(series, errors="coerce")
+        if numeric.notna().sum() == series.notna().sum():
+            # ints stored as objects (location/position) and floats alike
+            df[col] = pd.to_numeric(numeric, downcast="integer")
+        else:
+            # names, HV ids, detector types: few distinct values, many rows
+            df[col] = series.astype("category")
+    return df
+
+
 class Subsystem:
     """
     Object containing information for a given subsystem such as channel map, channels status etc.
@@ -321,6 +425,9 @@ class Subsystem:
             # ignore string values for fibers ('I/OB-XXX-XXX') and positions ('top/bottom') for SiPMs
             if isinstance(self.data[col].iloc[0], float):
                 self.data[col] = self.data[col].astype(int)
+        self.data = compact_channel_map_columns(
+            self.data, list(self.channel_map.columns)
+        )
         utils.logger.info("... appended channel map to the data dataframe")
 
         # -------------------------------------------------------------------------
@@ -414,6 +521,9 @@ class Subsystem:
         for col in ["location", "position"]:
             if isinstance(self.data[col].iloc[0], float):
                 self.data[col] = self.data[col].astype(int)
+        self.data = compact_channel_map_columns(
+            self.data, list(self.channel_map.columns)
+        )
         utils.logger.info("... appended channel map to the data dataframe")
 
         if self.type == "pulser":
@@ -454,10 +564,7 @@ class Subsystem:
             )
 
         def add_aux(param):
-            aux_subsys = Subsystem(aux_channel, dataset=dataset)
-            # get data for these parameters and time range given in the dataset
-            # (if no parameters given to plot, baseline and wfmax will always be loaded to flag pulser events anyway)
-            aux_subsys.get_data(param)
+            aux_subsys = _aux_subsystem(aux_channel, dataset, param)
 
             # some productions do not process every parameter for the aux channel
             # (e.g. no cuspEmax in the pulser01ana dsp tier from prod-blind v2.0.0 on)

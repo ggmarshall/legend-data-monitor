@@ -28,14 +28,21 @@ def test_dead_time_roundtrip(tmp_path):
     assert frame["dead_time_s"].iloc[0] == pytest.approx(123.0)
 
     out = monitoring.read_dead_time(str(tmp_path), "p22", "r012")
-    assert out == {"dead_time_s": pytest.approx(123.0), "dead_time_pct": pytest.approx(0.456)}
+    assert out == {
+        "dead_time_s": pytest.approx(123.0),
+        "dead_time_pct": pytest.approx(0.456),
+    }
 
 
 def test_dead_time_runs_are_independent(tmp_path):
     monitoring.write_dead_time(str(tmp_path), "p22", "r011", 10.0, 0.1)
     monitoring.write_dead_time(str(tmp_path), "p22", "r012", 20.0, 0.2)
-    assert monitoring.read_dead_time(str(tmp_path), "p22", "r011")["dead_time_s"] == 10.0
-    assert monitoring.read_dead_time(str(tmp_path), "p22", "r012")["dead_time_s"] == 20.0
+    assert (
+        monitoring.read_dead_time(str(tmp_path), "p22", "r011")["dead_time_s"] == 10.0
+    )
+    assert (
+        monitoring.read_dead_time(str(tmp_path), "p22", "r012")["dead_time_s"] == 20.0
+    )
 
 
 def test_read_dead_time_returns_none_when_absent(tmp_path):
@@ -74,7 +81,9 @@ def _det_info():
 def _pars(fwhm=3.1):
     return {
         "V01234A": {
-            "results": {"ecal": {"cuspEmax_ctc_cal": {"eres_linear": {"Qbb_fwhm_in_kev": fwhm}}}}
+            "results": {
+                "ecal": {"cuspEmax_ctc_cal": {"eres_linear": {"Qbb_fwhm_in_kev": fwhm}}}
+            }
         }
     }
 
@@ -179,7 +188,9 @@ def test_write_qc_rates_labels_detectors_and_roundtrips(tmp_path):
 
 def test_write_qc_rates_skips_when_nothing_computed(tmp_path):
     assert (
-        monitoring.write_qc_rates(str(tmp_path), "p22", "r012", {"IsDischarge": None}, {})
+        monitoring.write_qc_rates(
+            str(tmp_path), "p22", "r012", {"IsDischarge": None}, {}
+        )
         is None
     )
 
@@ -229,7 +240,9 @@ def test_write_qc_rate_series_roundtrip(tmp_path):
 
 def test_write_qc_rate_series_skips_empty(tmp_path):
     assert (
-        monitoring.write_qc_rate_series(str(tmp_path), "p22", "r012", "IsDischarge", None)
+        monitoring.write_qc_rate_series(
+            str(tmp_path), "p22", "r012", "IsDischarge", None
+        )
         is None
     )
 
@@ -242,7 +255,9 @@ def test_write_qc_rate_series_skips_empty(tmp_path):
 def test_write_ft_series_accepts_frames_and_series(tmp_path):
     idx = pd.date_range("2026-08-01", periods=3, freq="1h", tz="UTC")
     frame = pd.DataFrame({"V01234A": [1.0, 2.0, 3.0]}, index=idx)
-    path = monitoring.write_ft_series(str(tmp_path), "p22", "r012", "per_detector", frame)
+    path = monitoring.write_ft_series(
+        str(tmp_path), "p22", "r012", "per_detector", frame
+    )
     assert reader.read_frame(path, "ft_summary/per_detector/r012")[
         "V01234A"
     ].tolist() == pytest.approx([1.0, 2.0, 3.0])
@@ -258,7 +273,9 @@ def test_write_ft_series_accepts_frames_and_series(tmp_path):
 def test_write_ft_series_skips_empty(tmp_path):
     for empty in (None, pd.DataFrame(), pd.Series(dtype=float)):
         assert (
-            monitoring.write_ft_series(str(tmp_path), "p22", "r012", "per_string", empty)
+            monitoring.write_ft_series(
+                str(tmp_path), "p22", "r012", "per_string", empty
+            )
             is None
         )
 
@@ -291,11 +308,16 @@ def test_write_qc_classifier_fractions_roundtrip(tmp_path):
     back = reader.read_frame(path, "qc_classifier_frac/r012")
     assert len(back) == 3
     assert set(back["event_type"]) == {"All", "IsPulser", "IsPhysics"}
-    assert back.set_index("event_type")["percent_in_range"]["IsPhysics"] == pytest.approx(98.0)
+    assert back.set_index("event_type")["percent_in_range"][
+        "IsPhysics"
+    ] == pytest.approx(98.0)
 
 
 def test_write_qc_classifier_fractions_skips_empty(tmp_path):
-    assert monitoring.write_qc_classifier_fractions(str(tmp_path), "p22", "r012", []) is None
+    assert (
+        monitoring.write_qc_classifier_fractions(str(tmp_path), "p22", "r012", [])
+        is None
+    )
 
 
 # -------------------------------------------------------------------------

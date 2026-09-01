@@ -92,7 +92,9 @@ def open_shelf(path: str):
         yield shelf
 
 
-def period_contract_path(output_folder: str, period: str, data_type: str = "phy") -> str:
+def period_contract_path(
+    output_folder: str, period: str, data_type: str = "phy"
+) -> str:
     """Path of the period-level monitoring contract file.
 
     One file per (period, datatype) holding the numbers the monitoring figures
@@ -112,7 +114,9 @@ def write_dead_time(
     contract_writer.write_frame(
         path,
         f"dead_time/{run}",
-        pd.DataFrame([{"run": run, "dead_time_s": dead_time_s, "dead_time_pct": dead_time_pct}]),
+        pd.DataFrame(
+            [{"run": run, "dead_time_s": dead_time_s, "dead_time_pct": dead_time_pct}]
+        ),
     )
     return path
 
@@ -175,9 +179,7 @@ def write_qc_classifier_fractions(
     if not rows:
         return None
     path = period_contract_path(output_folder, period)
-    contract_writer.write_frame(
-        path, f"qc_classifier_frac/{run}", pd.DataFrame(rows)
-    )
+    contract_writer.write_frame(path, f"qc_classifier_frac/{run}", pd.DataFrame(rows))
     return path
 
 
@@ -639,9 +641,7 @@ def qc_and_evt_summary_plots(
         surviving = df_survived.resample("h").sum()["count"]
         surviving_frac = surviving / total_forced * 100
         write_ft_series(output_folder, period, run, "total_forced", total_forced)
-        write_ft_series(
-            output_folder, period, run, "survival_fraction", surviving_frac
-        )
+        write_ft_series(output_folder, period, run, "survival_fraction", surviving_frac)
 
         fig, ax = plt.subplots(figsize=(12, 6))
         surviving_frac.plot(ax=ax, drawstyle="steps-mid", color="red")
@@ -989,7 +989,7 @@ def box_summary_plot(
             run,
             f"mtg/l200-{period}-{run}-{data_type}-monitoring",
         )
-        ) as shelf:
+    ) as shelf:
         shelf[f"{period}_{run}_{info['title']}"] = serialized_plot
 
     plt.close()
@@ -1015,9 +1015,7 @@ def write_qc_rates(
     output_folder: str, period: str, run: str, rates_by_par: dict, detectors: dict
 ) -> str | None:
     """Write per-(flag, detector) QC rates into the period contract file."""
-    rawid_to_name = {
-        info.get("daq_rawid"): name for name, info in detectors.items()
-    }
+    rawid_to_name = {info.get("daq_rawid"): name for name, info in detectors.items()}
     rows = []
     for par, rates in rates_by_par.items():
         if rates is None:
@@ -1576,7 +1574,7 @@ def build_new_files(generated_path: str, period: str, run: str, data_type="phy")
 
             # mean dataframe is kept
             if "_mean" in k:
-                original_df.to_hdf(new_file, key=k, mode="a")
+                original_df.to_hdf(new_file, key=k, mode="a", **utils.HDF_COMPRESSION)
                 continue
 
             original_df.index = pd.to_datetime(original_df.index)
@@ -1585,7 +1583,7 @@ def build_new_files(generated_path: str, period: str, run: str, data_type="phy")
             # substitute the original df with the resampled one
             original_df = resampled_df
             # append resampled data to the new file
-            resampled_df.to_hdf(new_file, key=k, mode="a")
+            resampled_df.to_hdf(new_file, key=k, mode="a", **utils.HDF_COMPRESSION)
 
         if idx == 0:
             json_output = os.path.join(
@@ -1612,9 +1610,7 @@ def write_stability_series(
     if not series:
         return None
     path = period_contract_path(output_folder, period)
-    contract_writer.write_frame(
-        path, f"{group}/{name}/{run}", pd.DataFrame(series)
-    )
+    contract_writer.write_frame(path, f"{group}/{name}/{run}", pd.DataFrame(series))
     return path
 
 
@@ -1721,6 +1717,7 @@ def plot_time_series(
     gain_shift_series = {}
     param_series = {}
     cal_point_rows = []
+    cal_points_seen = set()
     for index_i in range(len(period_list)):
         period = period_list[index_i]
         run_list = dataset[period]
@@ -1873,21 +1870,25 @@ def plot_time_series(
                             "kx",
                             label="FEP gain",
                         )
-                        cal_point_rows += [
-                            {
-                                "detector": channel_name,
-                                "string": string,
-                                "position": pos,
-                                "run_start": start,
-                                "fep_diff": fep,
-                                "cal_const_diff": const,
-                            }
-                            for start, fep, const in zip(
-                                pars_data["run_start"],
-                                pars_data["fep_diff"],
-                                pars_data["cal_const_diff"],
-                            )
-                        ]
+                        # the markers are drawn once per correction type, but
+                        # they are the same calibration points: record them once
+                        if channel_name not in cal_points_seen:
+                            cal_points_seen.add(channel_name)
+                            cal_point_rows += [
+                                {
+                                    "detector": channel_name,
+                                    "string": string,
+                                    "position": pos,
+                                    "run_start": start,
+                                    "fep_diff": fep,
+                                    "cal_const_diff": const,
+                                }
+                                for start, fep, const in zip(
+                                    pars_data["run_start"],
+                                    pars_data["fep_diff"],
+                                    pars_data["cal_const_diff"],
+                                )
+                            ]
                         plt.plot(
                             pars_data["run_start"] - pd.Timedelta(hours=5),
                             pars_data["cal_const_diff"],
@@ -2199,9 +2200,9 @@ def plot_time_series(
 
                                 plt.plot(x, pul_cusp_av, "C2", label="PULS01ANA")
                                 plt.plot(x, diff_av, "C4", label="GED corrected")
-                                param_series.setdefault(
-                                    inspected_parameter, {}
-                                )[channel_name] = pulser_data["diff"]["kevdiff_av"]
+                                param_series.setdefault(inspected_parameter, {})[
+                                    channel_name
+                                ] = pulser_data["diff"]["kevdiff_av"]
                                 plt.fill_between(
                                     x,
                                     diff_av - diff_std,
@@ -2237,9 +2238,9 @@ def plot_time_series(
                                     color=info[inspected_parameter]["colors"][0],
                                     label="GED uncorrected",
                                 )
-                                param_series.setdefault(
-                                    inspected_parameter, {}
-                                )[channel_name] = pulser_data["ged"]["kevdiff_av"]
+                                param_series.setdefault(inspected_parameter, {})[
+                                    channel_name
+                                ] = pulser_data["ged"]["kevdiff_av"]
                                 plt.fill_between(
                                     x,
                                     vals_av - vals_std,

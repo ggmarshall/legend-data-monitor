@@ -42,8 +42,10 @@ from .config.settings import (  # noqa: E402,F401
     CALIB_RUNS,
     COLUMNS_TO_LOAD,
     FLAGS_RENAME,
+    HDF_COMPRESSION,
     IGNORE_KEYS,
     MTG_PLOT_INFO,
+    NO_DOWNCAST_COLUMNS,
     NO_PULS_DETS,
     PARAMETER_TIERS,
     PERIOD_TO_DB,
@@ -2251,3 +2253,26 @@ def build_detector_info_per_period(auto_dir_path: str, run_dict: dict, period: s
             )
 
     return detector_status
+
+
+def narrow_to_native_dtypes(df: DataFrame, native: dict) -> DataFrame:
+    """Undo the widening that assembling a frame causes, in place.
+
+    A channel that simply does not carry a field contributes no column, so
+    concatenating channels NaN-fills it -- and pandas widens the result to
+    float64 even when every tier that *does* have the field stores float32.
+    On p22 that alone doubles six classifier columns, and it follows the data
+    all the way to disk. ``native`` maps a column to the dtype the tier
+    actually used, as read before any concatenation.
+
+    Only float64->float32 is undone: a column the tier really stores as
+    float64 keeps its precision, because ``timestamp`` needs it and because
+    the parameters that feed a % variation would otherwise lose most of the
+    significant digits of ``value/mean - 1``.
+    """
+    for column, dtype in native.items():
+        if column not in df.columns:
+            continue
+        if df[column].dtype == "float64" and np.dtype(dtype) == np.float32:
+            df[column] = df[column].astype("float32")
+    return df

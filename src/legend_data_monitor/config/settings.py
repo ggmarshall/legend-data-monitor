@@ -55,19 +55,37 @@ with open(pkg / "settings" / "final-calibrations.yaml") as f:
     CALIB_RUNS = yaml.load(f, Loader=yaml.CLoader)
 
 # load list of columns to load for a dataframe
+# Channel-map columns carried alongside every event row. Keep this minimal:
+# these are per-detector constants repeated once per event, so each one costs
+# memory proportional to the number of events, not the number of detectors.
+# Anything a consumer only needs per detector (HV card/channel, DAQ crate/card,
+# detector type, ...) belongs in the channel map itself -- the contract file
+# publishes it as /detector_map -- not here.
 COLUMNS_TO_LOAD = [
     "name",
     "location",
     "channel",
     "position",
+    # cc4_id/cc4_channel are read by the "per cc4" plot structure
     "cc4_id",
     "cc4_channel",
-    "daq_crate",
-    "daq_card",
-    "HV_card",
-    "HV_channel",
-    "det_type",
 ]
+
+# On-disk layout for the pandas (v1) HDF outputs.
+#
+# blosc:lz4 is not just a size win: uncompressed fixed-format keys are stored
+# as *contiguous* arrays, so every chunk that rewrites a key orphans the old
+# block and the file ends up ~2.7x its live data. Compressed keys are chunked,
+# and HDF5 reuses their freed space -- so turning compression on removes the
+# slack as well. lz4 over zstd because these files are read back on every
+# chunk (append path), by the contract build, and by the dashboard; lz4 costs
+# ~5% more space than zstd but reads twice as fast.
+HDF_COMPRESSION = {"complib": "blosc:lz4", "complevel": 5}
+
+# Columns whose float64 precision is never meaningful for monitoring, but
+# which would double the size of every frame and every stored pivot. Excluded:
+# "timestamp" (unix seconds -- float32 cannot resolve a second at 1.7e9).
+NO_DOWNCAST_COLUMNS = {"timestamp"}
 
 # map position/location for special systems
 SPECIAL_SYSTEMS = {"pulser": 0, "pulser01ana": -1, "FCbsln": -2, "muon": -3}

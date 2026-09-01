@@ -59,7 +59,9 @@ def test_log_tree_layout_and_task_isolation(tmp_path):
     assert "END ERROR" in content
     assert "DataError: boom" in content
 
-    orch = (tmp_path / "generated/tmp/log/20260101T000000Z/orchestrator.log").read_text()
+    orch = (
+        tmp_path / "generated/tmp/log/20260101T000000Z/orchestrator.log"
+    ).read_text()
     assert re.search(r"FAILED task=first .*DataError: boom", orch)
     assert re.search(r"END task=second .*status=ok", orch)
 
@@ -110,9 +112,7 @@ def test_issue_jsonl_roundtrip(tmp_path):
     path = issues.issues_file_path(str(tmp_path), "p15", "r002", "phy")
     issues.write_issues(path, [issue])
 
-    assert path.endswith(
-        "generated/mon/issues/p15/r002/l200-p15-r002-phy-issues.jsonl"
-    )
+    assert path.endswith("generated/mon/issues/p15/r002/l200-p15-r002-phy-issues.jsonl")
     with open(path) as f:
         lines = f.read().splitlines()
     assert len(lines) == 1
@@ -291,7 +291,7 @@ def test_check_threshold_details_reach_the_issue_record(tmp_path):
         ["V02160A"],
         detector_info={"V02160A": {"daq_rawid": 1104000, "string": 4, "position": 2}},
     )
-    (issue,) = [i for i in found if i.metric == "pulser_stab"]
+    (issue,) = (i for i in found if i.metric == "pulser_stab")
     assert issue.observed == pytest.approx(4.5)
     assert issue.threshold == [-2.0, 2.0]
     assert issue.excursion.recovered is False

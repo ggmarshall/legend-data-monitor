@@ -146,6 +146,12 @@ New optional field: `issues: [ …up to 20 full JSONL records… ]` plus
   Also: `detector_map` lists every detector in the channel map, including ones
   with no data in this run (60 rows vs 59 data columns on p22/r012) — intersect
   on `ref_axes/axis_1/categories`, never zip by position.
+
+  3. **Storage dtypes are narrow**: `values` and `variances` are `float32`
+     and `counts` is `int32` (they were `float64` in files written before
+     2026-08-19). This halves the file and roughly triples how fast a reader
+     inflates it. Compare values with a tolerance (`rtol=1e-6`), not for
+     exact equality against a float64 recomputation.
 - Existing helpers reused unchanged: `validity_lookup.py` (mandatory before
   any status change), `channel_to_detector.py`.
 - Operational requirement: `MON_ROOTS` entries not under `PROD_ROOTS` must be

@@ -1,7 +1,6 @@
 import io
 import os
 import pickle
-import shelve
 from typing import Union
 
 import matplotlib.patches as mpatches
@@ -15,6 +14,7 @@ from seaborn import color_palette
 from . import (
     analysis_data,
     errors,
+    monitoring,
     plot_styles,
     save_data,
     string_visualization,
@@ -382,6 +382,12 @@ def make_subsystem_plots(
         )
 
         is_pdf_saved = render
+
+        # Drop this entry's frames before building the next one. Rebinding
+        # alone is too late: the next AnalysisData is fully constructed while
+        # these names still point at the previous ones, so the two largest
+        # objects in the run (~1 GB each for the QC entries) coexist.
+        del data_analysis, aux_analysis, aux_ratio_analysis, aux_diff_analysis
 
     if pdf is not None:
         pdf.close()

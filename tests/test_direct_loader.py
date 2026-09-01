@@ -8,6 +8,7 @@ is skipped when it is not reachable (e.g. off-cluster CI).
 
 import os
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -26,7 +27,11 @@ def test_merge_tiers_joins_on_channel_and_timestamp():
         {"channel": [1, 1, 2], "timestamp": [10.0, 11.0, 10.0], "baseline": [1, 2, 3]}
     )
     hit = pd.DataFrame(
-        {"channel": [2, 1, 1], "timestamp": [10.0, 11.0, 10.0], "cal": [30.0, 20.0, 10.0]}
+        {
+            "channel": [2, 1, 1],
+            "timestamp": [10.0, 11.0, 10.0],
+            "cal": [30.0, 20.0, 10.0],
+        }
     )
     merged = phy_files.merge_tiers({"dsp": dsp, "hit": hit}).sort_values(
         ["channel", "timestamp"]
@@ -102,3 +107,54 @@ def test_direct_loader_matches_dataloader_frame():
     for column in left.columns:
         assert left[column].dtype == right[column].dtype, column
         assert left[column].equals(right[column]), column
+
+
+def test_missing_field_yields_no_data_rather_than_uninitialised_values(tmp_path):
+    """A channel without a requested field must not contribute invented values.
+
+    The DataLoader path this replaces filled such channels with uninitialised
+    memory: on p22/r012, six detectors that carry is_valid_bl_poly_rms but not
+    is_valid_bl_poly_rms_classifier came out as denormals (~1.5e-319) against a
+    real range of -5.19..6315.89, and that garbage reached the v1 file, the
+    contract and the dashboard.
+    """
+    import lgdo
+    from lgdo import lh5
+
+    path = str(tmp_path / "l200-p22-r012-phy-20260101T000000Z-tier_dsp.lh5")
+    # ch0001 has both fields, ch0002 only one of them
+    lh5.write(
+        lgdo.Table(
+            {
+                "timestamp": lgdo.Array(np.array([1.0, 2.0])),
+                "baseline": lgdo.Array(np.array([10.0, 11.0])),
+                "special": lgdo.Array(np.array([100.0, 101.0])),
+            }
+        ),
+        "dsp",
+        path,
+        group="ch0001",
+    )
+    lh5.write(
+        lgdo.Table(
+            {
+                "timestamp": lgdo.Array(np.array([3.0, 4.0])),
+                "baseline": lgdo.Array(np.array([12.0, 13.0])),
+            }
+        ),
+        "dsp",
+        path,
+        group="ch0002",
+    )
+
+    frame = phy_files.load_channel_frame(
+        [path], "dsp", ["ch0001", "ch0002"], ["baseline", "special"]
+    )
+
+    assert set(frame["channel"]) == {1, 2}
+    # the channel that has the field keeps its real values
+    have = frame[frame["channel"] == 1]["special"]
+    assert sorted(have.tolist()) == [100.0, 101.0]
+    # the channel that lacks it is NaN, never a denormal or a zero
+    lack = frame[frame["channel"] == 2]["special"]
+    assert lack.isna().all(), lack.tolist()

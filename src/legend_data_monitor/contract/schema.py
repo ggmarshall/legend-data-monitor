@@ -56,7 +56,5 @@ def run_file_name(
     return f"{experiment}-{period}-{run}-{datatype}-{subsystem}.hdf"
 
 
-def manifest_name(
-    period: str, run: str, experiment: str = "l200"
-) -> str:
+def manifest_name(period: str, run: str, experiment: str = "l200") -> str:
     return f"{experiment}-{period}-{run}-manifest.json"

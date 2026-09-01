@@ -46,6 +46,140 @@ working). Settings constants → `config/settings.py` (single source of key voca
   `SAVED_PLOT` log lines.
 - 21 contract tests incl. plain-h5py (no lmon import) compatibility.
 
+## Full-run verification (2026-08-18)
+
+p22/r012 rerun end to end into a fresh tree and diffed against the pre-change
+golden snapshot: **exit 0, 3 h 11 m (was 5 h 00 m), peak RSS 17.3 GB (was 24
+GB)**. 196/200 v1 HDF keys byte-identical, 340/340 contract hist keys and the
+manifest identical, plus the new period-contract keys and figures.
+
+Two differences, both explained:
+
+1. **A data-corruption bug in the old loader, fixed.** The 4 non-identical keys
+   are all `*_IsValidBlPolyRmsClassifier`, differing only for 6 detectors
+   (rawids 1080003, 1105602, 1107203, 1108802, 1112000, 1112001). Those
+   channels genuinely lack `is_valid_bl_poly_rms_classifier` in the hit tier
+   (they carry `is_valid_bl_poly_rms`). The DataLoader path filled them with
+   uninitialised memory — denormals around 1.5e-319 against a real
+   -5.19..6315.89 range — which reached the v1 file, the contract and the
+   dashboard. The direct loader yields NaN; pinned by
+   `tests/test_direct_loader.py`.
+2. `qcp` cal differs for one detector (V09724A) because `check_escale` builds
+   each detector's multi-run band from `os.listdir()` over the **live** `/data2`
+   tree, and r014 landed after the golden was taken.
+
+**Golden diffs must therefore separate static outputs (r012 phy data, which
+must match) from cal-history-derived outputs (which legitimately drift as
+production adds runs).**
+
+## Output size and memory (2026-08-19)
+
+The pipeline was writing about 7x the disk it needed and holding about 2.3x
+the memory it needed. Both are now fixed, verified value-for-value against
+the previous output on a p22/r012 chunk: **200/200 v1 keys agree to float32
+epsilon (worst relative difference 6e-8), same key set, same indices**; the
+rebuilt contract file matches the old one across all 4006 datasets to the
+same tolerance.
+
+Measured on one 10-file chunk (production settings, `--plots off`):
+
+| | before | after |
+|---|---|---|
+| peak RSS | 3.23 GB | **1.42 GB** |
+| v1 file | 0.367 GB | **0.152 GB** |
+| wall | 307 s | 224 s |
+
+Per run at production chunk size the v1 file goes from **15.7 GB to ~2.2 GB**
+(the extra factor over the chunk measurement is slack, below) and the contract
+file from **1.06 GB to ~0.58 GB**, which also makes it ~3x faster to inflate --
+the number the dashboard feels.
+
+Size, in order of size:
+
+1. **Slack, 2.7x.** An uncompressed fixed-format pandas key is a *contiguous*
+   array, so overwriting it orphans the block it replaces -- and the append
+   path rewrites every key it touches once per chunk. 15.34 GB of file for
+   5.63 GB of data. Compressed keys are chunked and HDF5 hands the freed
+   blocks straight back, so turning compression on removes the slack as a
+   side effect (reproduced both ways in `tests/test_output_layout.py`).
+2. **blosc:lz4 (`utils.HDF_COMPRESSION`), 2.6x with the dtype below.** Chosen
+   over zstd/zlib, which are ~5% smaller but read twice as slowly: these files
+   are re-read on every chunk, by the contract build, and by the dashboard.
+3. **float32 pivots.** Values whose relative error at float32 is 6e-8, stored
+   at float64.
+4. **Contract storage narrowed** to float32 values/variances and int32 counts
+   (`contract.writer._narrow_storage`). boost-histogram views are float64
+   throughout; counts are integers. The group is assembled in an in-memory
+   HDF5 file and copied across (`expand_refs` remaps `axes`' object
+   references), because narrowing what uhi already wrote into the output
+   leaves the float64 blocks orphaned there — 1.37x slack, measured.
+
+Memory:
+
+1. **Dead mean/variation columns for the QC entries.** `save_hdf` writes
+   "absolute values ONLY" for `quality_cuts`, but `AnalysisData` still built
+   `<param>_mean` and `<param>_var` for ~30 flags/classifiers -- 60 extra
+   full-length columns (107 columns instead of 43) plus two whole-frame copies
+   in the channel-mean join, all discarded. Skipped now.
+2. **Two entries' frames alive at once.** Rebinding `data_analysis` in the
+   plot loop frees the previous frame only *after* the next one is fully
+   built, so the two largest objects in the run coexisted (~1 GB each).
+   Explicit `del` at the end of each iteration.
+3. **Rows before columns.** `params_to_get` carries every QC flag in the
+   frame, so copying the subsystem and *then* filtering to pulser events cost
+   ~15x what the entry needs.
+4. **Native tier dtypes restored** (`utils.narrow_to_native_dtypes`): a
+   channel missing a field NaN-fills it, and pandas widens the column to
+   float64 even when every tier that has it stores float32 -- six classifiers
+   on p22. Only that widening is undone: parameters the tier really stores as
+   float64 keep their precision, because `value/mean - 1` in float32 loses
+   most of the significant digits of a % variation (measured: 1e-5 % error on
+   `TrapemaxCtcCal_var`, against a 0.05 % limit -- fine, but free to avoid).
+5. **One fewer copy in the append path** (`del existing_data`; the `_var`
+   recompute now overwrites the frame it just read instead of copying it).
+
+`legend-data-monitor repack --output_folder ... --p p22 --r r000 ...` brings
+runs produced before this over without re-running the pipeline: ~5 min a run
+against ~3 h to regenerate, and it covers both file kinds (v1 pivots 7.1x,
+contract 1.8x). It is idempotent, atomic per file, and never replaces a file
+it did not manage to shrink.
+
+## Classifier pivots stripped from the v1 file (2026-08-20)
+
+Of the repacked 2.2 GB v1 file, **1.61 GB (73%) was the 28 QC classifier
+pivots** -- 7 classifiers x 4 event types of event-level continuous float32
+that barely compresses. They exist in the v1 file only as the *transport* to
+the contract build, which bins them into `hist/<key>/<cadence>`; res_10min /
+res_60min keep their own resampled copies. Decision (2026-08-19): classifiers
+live only in the contract, so `repack.strip_classifier_pivots` removes the
+pivots after the contract build.
+
+- **Guarded**: refuses to touch the file unless the contract carries
+  `hist/<key>/1min` for every key about to be removed -- a v1 file is never
+  stripped of the only copy of its data. QC *flag* (boolean) keys,
+  `_mean`/`_var`/`_info` keys and parameters all survive.
+- Wired as a final `strip_transport` task that strips the period's
+  *previous* runs only: qc_plots also reads the pivots (so the strip must run
+  last), and the current run is still appending -- stripping it mid-run would
+  make the contract rebuild bin only post-strip chunks. A finished run is
+  stripped on the first invocation that processes a later run; a period's
+  last run (and any backfill) is caught by `repack --strip-classifiers`.
+- Verified on p22/r006: 200 -> 172 keys, all 172 survivors
+  checksum-identical, livetime key selection unchanged
+  (`IsPulser_AoeCustom` sorts before the classifier keys either way, pinned
+  by test), contract classifier hists and the 28 res_10min copies intact,
+  second pass a no-op. **v1: 2.20 -> 0.63 GB; a run's full artifact set is
+  now ~1.2 GB against the original 17 GB (14x).**
+- This intentionally breaks 200-key parity with old production:
+  v1-only consumers lose event-level classifiers (binned versions remain in
+  the contract and res files). New runs still pay the transient ~1.6 GB of
+  pivots during the run -- they are the transport -- and drop them at the end.
+
+Declined for now (2026-08-19): dropping the contract's 1min min/max sidecars
+(226 MB, 40% of the file -- envelopes kept at all cadences) and the per-entry
+loading refactor that would take peak RSS from ~5.4 to ~3 GB (accepted 5.4 GB:
+r008-r012 measured 5.2-5.6 GB at production chunk size vs 14-17 before).
+
 ## Remaining
 
 1. **Pickled-figure shelve writers** in `monitoring.py` (qc_distributions,

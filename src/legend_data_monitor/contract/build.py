@@ -70,12 +70,8 @@ def build_contract_files(
 
     Returns the manifest path, or None when the v1 input file is absent.
     """
-    run_dir = os.path.join(
-        generated_path, "generated/plt/hit", data_type, period, run
-    )
-    v1_file = os.path.join(
-        run_dir, f"{experiment}-{period}-{run}-{data_type}-geds.hdf"
-    )
+    run_dir = os.path.join(generated_path, "generated/plt/hit", data_type, period, run)
+    v1_file = os.path.join(run_dir, f"{experiment}-{period}-{run}-{data_type}-geds.hdf")
     if not os.path.exists(v1_file):
         utils.logger.debug("no v1 monitoring file at %s; skipping v2 build", v1_file)
         return None

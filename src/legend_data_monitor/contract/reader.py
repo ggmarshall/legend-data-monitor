@@ -38,9 +38,7 @@ def read_binned_series(file_path: str, flag: str, param: str, cadence: str):
     """Return a BinnedTimeSeries for one (flag, param, cadence)."""
     from ..processing.binning import BinnedTimeSeries
 
-    hist, mins, maxs, _ = read_hist(
-        file_path, schema.hist_key(flag, param, cadence)
-    )
+    hist, mins, maxs, _ = read_hist(file_path, schema.hist_key(flag, param, cadence))
     if mins is None:
         n_bins, n_det = hist.view()["count"].shape
         mins = np.full((n_bins, n_det), np.nan)
@@ -52,7 +50,9 @@ def read_frame(file_path: str, key: str) -> pd.DataFrame:
     return pd.read_hdf(file_path, key=key)
 
 
-def read_manifest(dir_path: str, period: str, run: str, experiment: str = "l200") -> dict:
+def read_manifest(
+    dir_path: str, period: str, run: str, experiment: str = "l200"
+) -> dict:
     path = os.path.join(dir_path, schema.manifest_name(period, run, experiment))
     with open(path) as f:
         return json.load(f)

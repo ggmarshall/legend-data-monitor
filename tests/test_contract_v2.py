@@ -2,6 +2,7 @@
 
 import json
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -86,12 +87,8 @@ def test_merge_is_sum_and_minmax():
         merged.hist.view()["count"],
         b1.hist.view()["count"] + b2.hist.view()["count"],
     )
-    assert np.array_equal(
-        merged.mins, np.fmin(b1.mins, b2.mins), equal_nan=True
-    )
-    assert np.array_equal(
-        merged.maxs, np.fmax(b1.maxs, b2.maxs), equal_nan=True
-    )
+    assert np.array_equal(merged.mins, np.fmin(b1.mins, b2.mins), equal_nan=True)
+    assert np.array_equal(merged.maxs, np.fmax(b1.maxs, b2.maxs), equal_nan=True)
 
 
 # -------------------------------------------------------------------------
@@ -103,7 +100,10 @@ def test_roundtrip_binned_series(tmp_path):
     binned = _binned()
     path = str(tmp_path / "l200-p19-r001-phy-geds.hdf")
     keys = writer.write_binned_series(
-        path, "IsPulser", "TrapemaxCtcCal", binned,
+        path,
+        "IsPulser",
+        "TrapemaxCtcCal",
+        binned,
         attrs={"unit": "keV", "label": "Cal. gain", "limits": [-0.05, 0.05]},
     )
     assert keys == [
@@ -117,8 +117,17 @@ def test_roundtrip_binned_series(tmp_path):
     v0, v1 = binned.hist.view(), back.hist.view()
     assert np.allclose(v0["count"], v1["count"])
     assert np.allclose(v0["value"], v1["value"], equal_nan=True)
-    assert np.array_equal(binned.mins, back.mins, equal_nan=True)
+    # storage is narrowed to float32 on write (halves the file and the time a
+    # reader spends inflating it); everything must still match to float32
+    assert np.allclose(binned.mins, back.mins, rtol=1e-6, equal_nan=True)
     assert list(back.detectors) == DETS
+
+    with h5py.File(path, "r") as f:
+        storage = f[keys[0]]["storage"]
+        assert storage["counts"].dtype == np.int32
+        assert storage["values"].dtype == np.float32
+        assert storage["variances"].dtype == np.float32
+        assert f[keys[0]]["min"].dtype == np.float32
 
     _, _, _, attrs = reader.read_hist(path, keys[0])
     assert attrs["unit"] == "keV"
@@ -138,8 +147,14 @@ def test_roundtrip_distribution_and_frames(tmp_path):
     assert reader.read_frame(path, "IsPulser_Baseline_mean").iloc[0, 1] == 2.0
 
     detectors = {
-        "V02160A": {"daq_rawid": 1104000, "string": 2, "position": 3,
-                    "processable": True, "usability": "on", "mass_in_kg": 1.0}
+        "V02160A": {
+            "daq_rawid": 1104000,
+            "string": 2,
+            "position": 3,
+            "processable": True,
+            "usability": "on",
+            "mass_in_kg": 1.0,
+        }
     }
     writer.write_detector_map(path, detectors)
     dmap = reader.read_frame(path, "detector_map")
@@ -178,6 +193,7 @@ import sys
 for mod in list(sys.modules):
     assert not mod.startswith("legend_data_monitor"), mod
 import h5py
+import h5py
 import numpy as np
 with h5py.File({path!r}, "r") as f:
     assert int(f.attrs["lmon_schema_version"]) == 2
@@ -204,3 +220,31 @@ def test_apply_remove_keys_noop_without_entries():
     df = pd.DataFrame({"V02160A": range(10)}, index=idx, dtype=float)
     out = writer.apply_remove_keys(df, "p99", "r999")
     pd.testing.assert_frame_equal(out, df)
+
+
+def test_contract_file_carries_no_slack(tmp_path):
+    """Narrowing float64 *in the file* would orphan the blocks uhi wrote.
+
+    Needs a histogram big enough that the storage arrays dominate the fixed
+    ~0.5 MB of HDF5 group metadata, or an orphaned float64 copy hides in the
+    noise.
+    """
+    import os
+
+    t, d, v, t0, t1 = _events(n=400_000, hours=300.0)
+    binned = binning.fill_time_series(t, d, v, DETS, t0, t1)
+    path = str(tmp_path / "l200-p19-r001-phy-geds.hdf")
+    writer.write_binned_series(path, "IsPulser", "Trapemax", binned)
+
+    with h5py.File(path, "r") as f:
+        stored = []
+        f.visititems(
+            lambda n, o: (
+                stored.append(o.id.get_storage_size())
+                if isinstance(o, h5py.Dataset)
+                else None
+            )
+        )
+        assert f["hist/IsPulser_Trapemax/1min/storage/values"].dtype == np.float32
+    # an orphaned float64 copy of the storage measures 1.37x here
+    assert os.path.getsize(path) < 1.15 * sum(stored)
