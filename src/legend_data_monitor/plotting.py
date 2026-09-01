@@ -14,6 +14,7 @@ from seaborn import color_palette
 
 from . import (
     analysis_data,
+    errors,
     plot_styles,
     save_data,
     string_visualization,
@@ -192,12 +193,16 @@ def make_subsystem_plots(
                         "\033[91mPlotting per CC4 is not available for %s. Try again!\033[0m",
                         subsystem.type,
                     )
-                    exit()
+                    raise errors.MonitoringError(
+                        "make_subsystem_plots failed (see log for details)"
+                    )
                 else:
                     utils.logger.error(
                         "\033[91mPlotting per CC4 is not available because CC4 ID or/and CC4 channel are 'None'.\nTry again!\033[0m"
                     )
-                    exit()
+                    raise errors.MonitoringError(
+                        "make_subsystem_plots failed (see log for details)"
+                    )
             # ...if cc4 are present, group by them
             max_ch_per_string = (
                 data_to_plot.data.groupby("cc4_id")["cc4_channel"].nunique().max()
@@ -253,7 +258,7 @@ def make_subsystem_plots(
             # plot info should contain final parameter to plot i.e. _var if var is asked
             # unit, label and limits are connected to original parameter name
             # this is messy AF need to rethink
-            param_orig = param.rstrip("_var")
+            param_orig = param.removesuffix("_var")
             plot_info["unit"][param] = utils.PLOT_INFO[param_orig]["unit"]
             plot_info["label"][param] = utils.PLOT_INFO[param_orig]["label"]
 
@@ -489,7 +494,7 @@ def plot_per_cc4(data_analysis: DataFrame, plot_info: dict, pdf: PdfPages):
             "\033[91mPlotting per CC4 is not available for %s channel.\nTry again with a different plot structure!\033[0m",
             plot_info["subsystem"],
         )
-        exit()
+        raise errors.MonitoringError("plot_per_cc4 failed (see log for details)")
     # --- choose plot function based on user requested style e.g. vs time or histogram
     plot_style = plot_styles.PLOT_STYLE[plot_info["plot_style"]]
     utils.logger.debug("Plot style: " + plot_info["plot_style"])
@@ -514,7 +519,8 @@ def plot_per_cc4(data_analysis: DataFrame, plot_info: dict, pdf: PdfPages):
     ]
     labels["channel"] = labels.index
     labels["label"] = labels[["location", "position", "name", "cc4_channel"]].apply(
-        lambda x: f"s{x[0]}-p{x[1]}-{x[2]}-cc4 ch.{x[3]}", axis=1
+        lambda x: f"s{x['location']}-p{x['position']}-{x['name']}-cc4 ch.{x['cc4_channel']}",
+        axis=1,
     )
     # put it in the table
     data_analysis = data_analysis.set_index("channel")
@@ -605,7 +611,8 @@ def plot_per_string(data_analysis: DataFrame, plot_info: dict, pdf: PdfPages):
     labels = data_analysis.groupby("channel").first()[["name", "position"]]
     labels["channel"] = labels.index
     labels["label"] = labels[["position", "channel", "name"]].apply(
-        lambda x: f"p{x[0]}-ch{str(x[1]).zfill(3)}-{x[2]}", axis=1
+        lambda x: f"p{x['position']}-ch{str(x['channel']).zfill(3)}-{x['name']}",
+        axis=1,
     )
     # put it in the table
     data_analysis = data_analysis.set_index("channel")
@@ -689,7 +696,7 @@ def plot_array(data_analysis: DataFrame, plot_info: dict, pdf: PdfPages):
         utils.logger.error(
             "\033[91mPlotting per array is not available for the spms.\nTry again!\033[0m"
         )
-        exit()
+        raise errors.MonitoringError("plot_array failed (see log for details)")
 
     # --- choose plot function based on user requested style
     plot_style = plot_styles.PLOT_STYLE[plot_info["plot_style"]]
@@ -710,7 +717,8 @@ def plot_array(data_analysis: DataFrame, plot_info: dict, pdf: PdfPages):
     labels = data_analysis.groupby("channel").first()[["name", "location", "position"]]
     labels["channel"] = labels.index
     labels["label"] = labels[["location", "position", "channel", "name"]].apply(
-        lambda x: f"p{x[1]}-ch{str(x[2])}-{x[3]}", axis=1
+        lambda x: f"p{x['position']}-ch{str(x['channel'])}-{x['name']}",
+        axis=1,
     )
     # put it in the table
     data_analysis = data_analysis.set_index("channel")
@@ -822,7 +830,9 @@ def plot_per_fiber_and_barrel(data_analysis: DataFrame, plot_info: dict, pdf: Pd
         utils.logger.error(
             "\033[91mPlotting per fiber-barrel is available ONLY for spms.\nTry again!\033[0m"
         )
-        exit()
+        raise errors.MonitoringError(
+            "plot_per_fiber_and_barrel failed (see log for details)"
+        )
     # here will be a function plotting SiPMs with:
     # - one figure for top and one for bottom SiPMs
     # - each figure has subplots with N columns and M rows where N is the number of fibers, and M is the number of positions (top/bottom -> 2)
@@ -839,7 +849,9 @@ def plot_per_barrel_and_position(
         utils.logger.error(
             "\033[91mPlotting per barrel-position is available ONLY for spms.\nTry again!\033[0m"
         )
-        exit()
+        raise errors.MonitoringError(
+            "plot_per_barrel_and_position failed (see log for details)"
+        )
     # here will be a function plotting SiPMs with:
     # - one figure for each barrel-position combination (IB-top, IB-bottom, OB-top, OB-bottom) = 4 figures in total
 
@@ -868,7 +880,10 @@ def plot_per_barrel_and_position(
     labels["channel"] = labels.index
     labels["label"] = labels[
         ["position", "location", "fiber", "channel", "name"]
-    ].apply(lambda x: f"{x[0]}-{x[1]}-{x[2]}-ch{str(x[3]).zfill(3)}-{x[4]}", axis=1)
+    ].apply(
+        lambda x: f"{x['position']}-{x['location']}-{x['fiber']}-ch{str(x['channel']).zfill(3)}-{x['name']}",
+        axis=1,
+    )
     # put it in the table
     data_analysis = data_analysis.set_index("channel")
     data_analysis["label"] = labels["label"]
@@ -1028,63 +1043,6 @@ def save_pdf(plt, pdf: PdfPages):
 # -------------------------------------------------------------------------------
 
 
-def apply_cal_to_following_run(mu_vals: np.ndarray, cal_vals: np.ndarray):
-    """
-    Apply calibration parameters from each run to the following run's ADC values.
-
-    Returns a list of calibrated peak positions in keV for each following run.
-
-    Assumes `mu_vals` and `cal_vals` have the same length.
-    If `mu_vals` and `cal_vals` do not have the same length an error is raised.
-    The function shifts the arrays so that each calibration is applied to the subsequent run:
-    - drops the first element of `mu_vals`
-    - drops the last element of `cal_vals`
-
-    Each ADC value is converted to keV using a polynomial calibration.
-
-    Parameters
-    ----------
-    mu_vals : np.ndarray
-        Sequence of ADC peak positions (one per run).
-    cal_vals : np.ndarray
-        Sequence of calibration polynomial coefficients (one per run).
-    """
-    if len(mu_vals) == len(cal_vals):
-        mu_vals = mu_vals[1:]
-        cal_vals = cal_vals[:-1]
-        mu_keV = []
-        for mu, cal_v in zip(mu_vals, cal_vals):
-            mu_keV.append(np.polynomial.polynomial.polyval(mu, cal_v))
-        return mu_keV
-    else:
-        raise ValueError
-
-
-def filter_period(keys: list, vals: list, *periods):
-    """
-    Filter key-value pairs by matching key prefixes (e.g. 'p18'); only entries where the key starts with any of the provided period prefixes (e.g. 'p18', 'p19') are retained.
-
-    Returns filtered (keys, values), otherwise empty lists if no matches are found.
-
-    Parameters
-    ----------
-    keys : list
-        List of keys
-    vals : list
-        Values corresponding to `keys`.
-    *periods : ntuple of str
-        Variable number of prefix strings to filter by.
-    """
-    items = [
-        (k, v) for k, v in zip(keys, vals) if any(k.startswith(p) for p in periods)
-    ]
-    if not items:
-        return [], []
-    ks, vs = zip(*items)
-
-    return list(ks), list(vs)
-
-
 def plot_det_status(det_name: str, ax: Axes, detector_status: dict, keys: list):
     """
     Overlay detector usability status as shaded regions on a plot: 'ac' ('off') grey (red) shaded region.
@@ -1145,6 +1103,30 @@ def align_to_keys(all_keys: list, keys: list, values: list, categorical=False):
     return aligned
 
 
+def _record_variable_detail(
+    det_name, period, current_run, metric, units, val, lower, upper, reference, ok
+):
+    """Stash the magnitudes behind one cal-metric verdict for the issue record.
+
+    These bands are a few times the mean fit error around the detector's own
+    multi-run mean, so the numbers (not just the pass/fail) are what tell a
+    reader whether a deviation matters — and on which side it fell.
+    """
+    if ok or metric is None:
+        return
+    utils.issues.record_detail(
+        period,
+        current_run,
+        "cal",
+        det_name,
+        metric,
+        observed=float(val),
+        threshold=[float(lower), float(upper)],
+        unit=units,
+        reference=float(reference),
+    )
+
+
 def plot_variable(
     det_name: str,
     ax: Axes,
@@ -1156,6 +1138,7 @@ def plot_variable(
     current_run: str,
     errs=None,
     title="",
+    metric=None,
     units="keV",
     alpha=1,
     fixed_thr=None,
@@ -1310,6 +1293,18 @@ def plot_variable(
                     upper = mean_arr_p + fixed_thr
                     lower = mean_arr_p - fixed_thr
                     not_out_of_bounds = bool(lower <= val <= upper)
+                    _record_variable_detail(
+                        det_name,
+                        period,
+                        current_run,
+                        metric,
+                        units,
+                        val,
+                        lower,
+                        upper,
+                        mean_arr_p,
+                        not_out_of_bounds,
+                    )
 
             if err_thr is not None and errs_aligned is not None:
                 errs0 = errs_aligned[mask][valid]
@@ -1339,6 +1334,18 @@ def plot_variable(
                     upper = mean_arr_p + err_thr * means_err
                     lower = mean_arr_p - err_thr * means_err
                     not_out_of_bounds = bool(lower <= val <= upper)
+                    _record_variable_detail(
+                        det_name,
+                        period,
+                        current_run,
+                        metric,
+                        units,
+                        val,
+                        lower,
+                        upper,
+                        mean_arr_p,
+                        not_out_of_bounds,
+                    )
 
     ax.set_title(title, fontsize=14)
     if ylabel is None:
@@ -1370,9 +1377,13 @@ def plot_all_detector_info(
     output_folder: str,
     save_pdf=False,
     exclude_period=None,
+    shelf=None,
 ):
     """
     Generate a comprehensive multi-panel summary plot of detector performance.
+
+    If ``shelf`` (an open shelve object) is given it is used directly;
+    otherwise the monitoring shelve is opened and closed per call.
 
     Produces a grid of subplots showing key quantities such as:
     - Slow control voltage
@@ -1509,6 +1520,7 @@ def plot_all_detector_info(
         fwhm_fep_err,
         plot_det_stat=True,
         title="FWHM at FEP",
+        metric="escale_fwhm_FEP",
         units="keV",
         err_thr=3,
         exclude_period=exclude_period,
@@ -1525,6 +1537,7 @@ def plot_all_detector_info(
         fwhm_583_err,
         plot_det_stat=True,
         title="FWHM at 583 keV",
+        metric="escale_fwhm_583",
         units="keV",
         err_thr=3,
         exclude_period=exclude_period,
@@ -1541,6 +1554,7 @@ def plot_all_detector_info(
         mu_fep_keV_first_cal_err,
         plot_det_stat=True,
         title="FEP position in keV using first cal",
+        metric="escale_FEP_pos",
         units="keV",
         fixed_thr=0.65375,
         exclude_period=exclude_period,
@@ -1556,6 +1570,7 @@ def plot_all_detector_info(
         current_run,
         plot_det_stat=True,
         title="SEP residuals",
+        metric="escale_SEP_residual",
         units="keV",
         fixed_thr=0.65375,
         exclude_period=exclude_period,
@@ -1690,19 +1705,21 @@ def plot_all_detector_info(
 
     # store the serialized plot in a shelve object under key
     serialized_plot = pickle.dumps(plt.gcf())
-    with shelve.open(
-        os.path.join(
-            output_folder,
-            period,
-            "mtg",
-            f"l200-{period}-cal-monitoring",
-        ),
-        "c",
-        protocol=pickle.HIGHEST_PROTOCOL,
-    ) as shelf:
-        shelf[f"{period}_string{string}_pos{position}_{det_name}_ESCALEusability"] = (
-            serialized_plot
-        )
+    shelf_key = f"{period}_string{string}_pos{position}_{det_name}_ESCALEusability"
+    if shelf is not None:
+        shelf[shelf_key] = serialized_plot
+    else:
+        with shelve.open(
+            os.path.join(
+                output_folder,
+                period,
+                "mtg",
+                f"l200-{period}-cal-monitoring",
+            ),
+            "c",
+            protocol=pickle.HIGHEST_PROTOCOL,
+        ) as own_shelf:
+            own_shelf[shelf_key] = serialized_plot
     plt.close()
 
     eval_result = {

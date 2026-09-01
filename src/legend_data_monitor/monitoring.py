@@ -4,42 +4,73 @@ import json
 import math
 import os
 import pickle
-import re
 import shelve
-import sys
 from functools import partial
 
 import awkward as ak
 import h5py
-import lh5
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import pytz
 import yaml
 from lgdo.lh5 import read_as
 from matplotlib.patches import Patch
 
-from . import utils
+from . import errors, utils
+
+# --- Phase 4 re-export shims: these functions moved to loading/ and processing/;
+# import them here so existing ``monitoring.X`` references keep working. ---
+from .loading.calib_files import (  # noqa: F401
+    _first_run_key,
+    _load_validity_file,
+    _run_times_cache,
+    add_calibration_runs,
+    evaluate_fep_cal,
+    extract_fep_peak,
+    extract_resolution_at_q_bb,
+    get_calib_data_dict,
+    get_calib_pars,
+    get_calibration_file,
+    get_energy_key,
+    get_run_start_end_times,
+    get_tier_keyresult,
+)
+from .processing.series import (  # noqa: F401
+    compute_diff,
+    compute_diff_and_rescaling,
+    filter_by_period,
+    filter_series_by_ignore_keys,
+    find_hdf_file,
+    get_dfs,
+    get_pulser_data,
+    get_traptmax_tp0est,
+    read_if_key_exists,
+    resample_series,
+)
 
 # -------------------------------------------------------------------------
 
-IPython_default = plt.rcParams.copy()
 SMALL_SIZE = 8
 
-plt.rc("font", size=SMALL_SIZE)
-plt.rc("axes", titlesize=SMALL_SIZE)
-plt.rc("axes", labelsize=SMALL_SIZE)
-plt.rc("xtick", labelsize=SMALL_SIZE)
-plt.rc("ytick", labelsize=SMALL_SIZE)
-plt.rc("legend", fontsize=SMALL_SIZE)
-plt.rc("figure", titlesize=SMALL_SIZE)
-plt.rcParams["font.family"] = "serif"
 
-matplotlib.rcParams["mathtext.fontset"] = "stix"
+def apply_monitoring_style():
+    """Apply the monitoring plot style to matplotlib's global rcParams.
 
-plt.rc("axes", facecolor="white", edgecolor="black", axisbelow=True, grid=True)
+    Called by the plot-generating functions; importing this module must not
+    restyle the host application's matplotlib.
+    """
+    plt.rc("font", size=SMALL_SIZE)
+    plt.rc("axes", titlesize=SMALL_SIZE)
+    plt.rc("axes", labelsize=SMALL_SIZE)
+    plt.rc("xtick", labelsize=SMALL_SIZE)
+    plt.rc("ytick", labelsize=SMALL_SIZE)
+    plt.rc("legend", fontsize=SMALL_SIZE)
+    plt.rc("figure", titlesize=SMALL_SIZE)
+    plt.rcParams["font.family"] = "serif"
+    matplotlib.rcParams["mathtext.fontset"] = "stix"
+    plt.rc("axes", facecolor="white", edgecolor="black", axisbelow=True, grid=True)
+
 
 IGNORE_KEYS = utils.IGNORE_KEYS
 CALIB_RUNS = utils.CALIB_RUNS
@@ -57,6 +88,7 @@ def qc_distributions(
     det_info: dict,
     save_pdf: bool,
 ):
+    apply_monitoring_style()
     pars_to_inspect = [
         "IsValidBlSlopeClassifier",
         "IsValidTailRmsClassifier",
@@ -240,101 +272,6 @@ def qc_distributions(
                 plt.close()
 
 
-def qc_ft_failure_rates(
-    auto_dir_path: str,
-    phy_mtg_data: str,
-    output_folder: str,
-    start_key: str,
-    period: str,
-    run: str,
-    det_info: dict,
-    save_pdf: bool,
-):
-    my_file = os.path.join(
-        output_folder, f"{period}/{run}/l200-{period}-{run}-phy-geds.hdf"
-    )
-    str_chns = det_info["str_chns"]
-    utils.logger.debug("...inspecting FT failure rates")
-    if not os.path.exists(my_file):
-        utils.logger.warning(f"...file not found: {my_file}. Return!")
-        return
-
-    end_folder = os.path.join(
-        output_folder,
-        period,
-        run,
-        "mtg",
-    )
-    os.makedirs(end_folder, exist_ok=True)
-    shelve_path = os.path.join(
-        end_folder,
-        f"l200-{period}-{run}-phy-monitoring",
-    )
-
-    with (
-        shelve.open(shelve_path, "c", protocol=pickle.HIGHEST_PROTOCOL) as shelf,
-        pd.HDFStore(my_file, "r") as store,
-    ):
-        df = store["/IsBsln_IsBbLike"]
-        df_DD = store["/IsBsln_IsDelayedDischarge"]
-        df = filter_series_by_ignore_keys(df, utils.IGNORE_KEYS, period)
-        df_DD = filter_series_by_ignore_keys(df_DD, utils.IGNORE_KEYS, period)
-        df_clean = df[~df_DD]
-        color_cycle = itertools.cycle(plt.cm.tab20.colors)
-
-        for string, det_list in str_chns.items():
-            fig, ax = plt.subplots(figsize=(12, 6))
-
-            for det in det_list:
-                if not det_info["detectors"][det]["processable"]:
-                    continue
-
-                ch = det_info["detectors"][det]["daq_rawid"]
-                pos = det_info["detectors"][det]["position"]
-
-                if ch not in df_clean.columns:
-                    continue
-
-                # Take channel data and resample to hourly counts
-                data = df_clean[ch].copy()
-                hourly_counts = data.resample("1H").sum()
-
-                # convert to mHz: (counts / 3600 sec) * 1000
-                hourly_rate = hourly_counts / 3600 * 1000
-
-                color = next(color_cycle)
-                hourly_rate.plot(
-                    ax=ax,
-                    drawstyle="steps-mid",
-                    label=f"{det} - pos {pos}",
-                    color=color,
-                )
-
-                ax.set_ylabel("FT failure rate [mHz]")
-                ax.legend(ncol=2, fontsize="small", loc="upper left")
-                ax.grid(False)
-
-            fig.suptitle(f"{period} - {run} - string {string}")
-            fig.tight_layout()
-
-            if save_pdf:
-                pdf_folder = os.path.join(
-                    output_folder, f"{period}/{run}/mtg/pdf", f"st{string}"
-                )
-                os.makedirs(pdf_folder, exist_ok=True)
-                plt.savefig(
-                    os.path.join(
-                        pdf_folder,
-                        f"{period}_{run}_string{string}_FT_failure.pdf",
-                    ),
-                    bbox_inches="tight",
-                )
-
-            # serialize+plot in a shelve object
-            shelf[f"{period}_{run}_FT_failure"] = pickle.dumps(fig)
-            plt.close()
-
-
 def mhz_to_percent(mhz, avg_total_forced_mhz):
     return (mhz / avg_total_forced_mhz) * 100
 
@@ -354,6 +291,7 @@ def qc_and_evt_summary_plots(
     det_info: dict,
     save_pdf: bool,
 ):
+    apply_monitoring_style()
     utils.logger.debug("...inspecting FT failure rates")
     evt_files_phy = sorted(
         glob.glob(f"{auto_dir_path}/generated/tier/evt/phy/{period}/{run}/*.lh5")
@@ -390,21 +328,24 @@ def qc_and_evt_summary_plots(
         field_mask=["is_empty_bits", "rawid"],
     )
 
-    # build dataframe for FT FAILING events
+    # build dataframe for FT FAILING events (vectorized: one count matrix fill
+    # instead of a python loop over every event)
     mask = forced.is_forced & ~is_bb.is_bb_like & ~is_dis.is_delayed_discharge
     temp = is_fail.rawid[mask]
-    y = {ch: np.zeros(len(forced.timestamp[mask])) for ch in set(ak.flatten(temp))}
-    for i in range(len(temp)):
-        if len(temp[i]) == 0:
-            continue
-        for ch in temp[i]:
-            y[ch][i] += 1
+    n_events = len(temp)
+    flat_ch = ak.to_numpy(ak.flatten(temp))
+    channels = np.unique(flat_ch)
+    counts = np.zeros((n_events, len(channels)))
+    if flat_ch.size:
+        event_idx = np.repeat(np.arange(n_events), ak.to_numpy(ak.num(temp)))
+        np.add.at(counts, (event_idx, np.searchsorted(channels, flat_ch)), 1)
+    y = {ch: counts[:, j] for j, ch in enumerate(channels)}
     y["timestamp"] = ak.to_numpy(forced.timestamp[mask])
 
     df = pd.DataFrame(y)
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
     df.set_index("timestamp", inplace=True)
-    daily_cnt = df.resample("H").sum()
+    daily_cnt = df.resample("h").sum()
 
     # Folders
     end_folder = os.path.join(output_folder, period, run, "mtg")
@@ -420,7 +361,7 @@ def qc_and_evt_summary_plots(
     )
     df_all["timestamp"] = pd.to_datetime(df_all["timestamp"], unit="s")
     df_all.set_index("timestamp", inplace=True)
-    total_forced = df_all.resample("H").size()  # counts/hour, all strings
+    total_forced = df_all.resample("h").size()  # counts/hour, all strings
     avg_total_forced_mhz = (total_forced.mean() / 3600) * 1000
     on_mass = 0
 
@@ -533,8 +474,8 @@ def qc_and_evt_summary_plots(
         ts_survived = pd.to_datetime(forced.timestamp[mask_survived], unit="s")
         df_all = pd.DataFrame({"count": 1}, index=ts_all)
         df_survived = pd.DataFrame({"count": 1}, index=ts_survived)
-        total_forced = df_all.resample("H").sum()["count"]
-        surviving = df_survived.resample("H").sum()["count"]
+        total_forced = df_all.resample("h").sum()["count"]
+        surviving = df_survived.resample("h").sum()["count"]
         surviving_frac = surviving / total_forced * 100
 
         fig, ax = plt.subplots(figsize=(12, 6))
@@ -591,7 +532,7 @@ def qc_and_evt_summary_plots(
             if s.empty:
                 continue
             freq, bin_edges = np.histogram(
-                s, bins=pd.date_range(start=s.min(), end=s.max(), freq="H")
+                s, bins=pd.date_range(start=s.min(), end=s.max(), freq="h")
             )
             ax.stairs(freq / 3600 * 1000 / on_mass, bin_edges, label=label, color=color)
 
@@ -678,6 +619,7 @@ def box_summary_plot(
     run_to_apply :
         Run to apply (eg see ssc data).
     """
+    apply_monitoring_style()
     utils.logger.debug("...making summary box plots for %s", info["title"])
     detectors = det_info["detectors"]
     plot_data = []
@@ -716,6 +658,11 @@ def box_summary_plot(
         )
 
     df_plot = pd.DataFrame(plot_data)
+    if df_plot.empty:
+        raise errors.DataError(
+            f"box_summary_plot: no detector results to plot for '{info['title']}' "
+            "(empty or missing input data)"
+        )
     # sort by string, and then position
     df = df_plot.sort_values(["string", "pos"]).reset_index(drop=True)
 
@@ -885,6 +832,7 @@ def qc_average(
     pars_to_inspect : list
         List of parameters (boolean flags) to inspect.
     """
+    apply_monitoring_style()
     if pars_to_inspect is None:
         pars_to_inspect = [
             "IsHighlyPositivePolarityCandidate",
@@ -1107,6 +1055,7 @@ def qc_time_series(
     pars_to_inspect : list
         List of parameters (boolean flags) to inspect.
     """
+    apply_monitoring_style()
     if pars_to_inspect is None:
         pars_to_inspect = [
             "IsHighlyPositivePolarityCandidate",
@@ -1182,7 +1131,7 @@ def qc_time_series(
                     diff = (time_max - time_min).total_seconds()
 
                     true_rate_mHz = round(true_count / diff * 1000, 2)
-                    hourly_rate = data.resample("1H").sum() / 3600 * 1000
+                    hourly_rate = data.resample("1h").sum() / 3600 * 1000
 
                     color = next(color_cycle)
                     hourly_rate.plot(
@@ -1232,935 +1181,6 @@ def qc_time_series(
                 plt.close(fig)
 
 
-def get_energy_key(
-    ecal_results: dict,
-) -> dict:
-    """
-    Retrieve the energy calibration results from a given dictionary.
-
-    This function searches for specific keys ('cuspEmax_ctc_runcal' or 'cuspEmax_ctc_cal') in the input `ecal_results` dictionary.
-    It returns a sub-dictionary if one of the keys is found, otherwise an empty dictionary is returned.
-
-    Parameters
-    ----------
-    ecal_results : dict
-        Dictionary containing energy calibration results.
-    """
-    cut_dict = {}
-    for key in ["cuspEmax_ctc_runcal", "cuspEmax_ctc_cal"]:
-        if key in ecal_results:
-            cut_dict = ecal_results[key]
-            break
-    else:
-        utils.logger.debug("No cuspEmax key")
-        return cut_dict
-
-    return cut_dict
-
-
-def get_calibration_file(folder_par: str) -> dict:
-    """
-    Return the content of the JSON/YAML calibration file in folder_par.
-
-    Parameters
-    ----------
-    folder_par : str
-        Path to the folder containing calibration summary files.
-    """
-    files = os.listdir(folder_par)
-    json_files = [f for f in files if f.endswith(".json")]
-    yaml_files = [f for f in files if f.endswith((".yaml", ".yml"))]
-
-    if json_files:
-        filepath = os.path.join(folder_par, json_files[0])
-        with open(filepath) as f:
-            pars_dict = json.load(f)
-    elif yaml_files:
-        filepath = os.path.join(folder_par, yaml_files[0])
-        with open(filepath) as f:
-            pars_dict = yaml.load(f, Loader=yaml.CLoader)
-    else:
-        raise FileNotFoundError(f"No JSON or YAML file found in {folder_par}")
-
-    return pars_dict
-
-
-def extract_fep_peak(pars_dict: dict, channel: str):
-    """
-    Return fep_peak_pos, fep_peak_pos_err, fep_gain, fep_gain_err.
-
-    Parameters
-    ----------
-    pars_dict : dict
-        Dictionary containing calibration outputs.
-    channel : str
-        Channel name or IDs.
-    """
-    if channel not in pars_dict:
-        return np.nan, np.nan, np.nan, np.nan
-
-    # for FEP peak, we want to look at the behaviour over time; take 'ecal' results (not partition ones!)
-    ecal_results = pars_dict[channel]["results"]["ecal"]
-    pk_fits = get_energy_key(ecal_results).get("pk_fits", {})
-
-    try:
-        fep_energy = [p for p in sorted(pk_fits) if 2613 < float(p) < 2616][0]
-        try:
-            fep_peak_pos = pk_fits[fep_energy]["parameters_in_ADC"]["mu"]
-            fep_peak_pos_err = pk_fits[fep_energy]["uncertainties_in_ADC"]["mu"]
-        except (KeyError, TypeError):
-            fep_peak_pos = pk_fits[fep_energy]["parameters"]["mu"]
-            fep_peak_pos_err = pk_fits[fep_energy]["uncertainties"]["mu"]
-
-        fep_gain = fep_peak_pos / 2614.5
-        fep_gain_err = fep_peak_pos_err / 2614.5
-
-    except (KeyError, TypeError, IndexError):
-        return np.nan, np.nan, np.nan, np.nan
-
-    return fep_peak_pos, fep_peak_pos_err, fep_gain, fep_gain_err
-
-
-def extract_resolution_at_q_bb(
-    pars_dict: dict, channel: str, key_result: str, fit: str = "linear"
-):
-    """
-    Return Qbb_fwhm (linear resolution) and Qbb_fwhm_quad (quadratic resolution).
-
-    Parameters
-    ----------
-    pars_dict : dict
-        Dictionary containing calibration outputs.
-    channel : str
-        Channel name or IDs (eg ch10000).
-    key_result : str
-        Key name used to extract the resolution results from the parsed file.
-    fit : str
-        Fitting method used for energy resolution, either 'linear' or 'quadratic'.
-    """
-    if channel not in pars_dict:
-        return np.nan, np.nan
-
-    result = pars_dict[channel]["results"][key_result].get("cuspEmax_ctc_cal", {})
-    eres_linear = result.get("eres_linear") or {}
-    Qbb_keys = [k for k in eres_linear if "Qbb_fwhm_in_" in k]
-    if not Qbb_keys:
-        return np.nan, np.nan
-
-    Qbb_fwhm = result["eres_linear"][Qbb_keys[0]]
-    Qbb_fwhm_quad = result["eres_quadratic"][Qbb_keys[0]] if fit != "linear" else np.nan
-
-    return Qbb_fwhm, Qbb_fwhm_quad
-
-
-def evaluate_fep_cal(
-    pars_dict: dict, channel: str, fep_peak_pos: float, fep_peak_pos_err: float
-):
-    """
-    Return calibrated FEP position (fep_cal) and error (fep_cal_err).
-
-    Parameters
-    ----------
-    pars_dict : dict
-        Dictionary containing calibration outputs.
-    channel : str
-        Channel name or IDs.
-    fep_peak_pos : float
-        Uncalibrated FEP position.
-    fep_peak_pos_err : float
-        Uncalibrated FEP position error.
-    """
-    if channel not in pars_dict:
-        return np.nan, np.nan
-
-    ecal_results = get_energy_key(pars_dict[channel]["pars"]["operations"])
-    expr = ecal_results["expression"]
-    params = ecal_results["parameters"]
-
-    fep_cal = eval(expr, {}, {**params, "cuspEmax_ctc": fep_peak_pos})
-    fep_cal_err = eval(expr, {}, {**params, "cuspEmax_ctc": fep_peak_pos_err})
-
-    return fep_cal, fep_cal_err
-
-
-def get_run_start_end_times(
-    sto,
-    tiers: list,
-    period: str,
-    run: str,
-    tier: str,
-):
-    """
-    Determine the start and end timestamps for a given run, including the special case for additional final calibration runs.
-
-    Parameters
-    ----------
-    sto
-        Store object to read timestamps from LH5 files.
-    tiers : list of str
-        Paths to tier data folders based on the inspected processed version.
-    period : str
-        Period to inspect.
-    run : str
-        Run to inspect.
-    tier : str
-        Tier level for the analysis ('hit', 'phy', etc.).
-    """
-    folder_tier = os.path.join(tiers[0 if tier == "hit" else 1], "cal", period, run)
-    dir_path = os.path.join(tiers[-1], "phy", period)
-    pattern = re.compile(
-        r"^l\d+-p\d+-r\d+-(cal|hit|raw)-\d{8}T\d{6}Z-tier_(dsp|hit|raw)\.lh5$"
-    )
-
-    run_files = sorted(f for f in os.listdir(folder_tier) if pattern.match(f))
-
-    # for when we have a calib run but zero phy runs for a given period
-    if os.path.isdir(dir_path) and run not in os.listdir(dir_path):
-        run_end_time = pd.to_datetime(
-            sto.read(
-                "ch1027201/dsp/timestamp", os.path.join(folder_tier, run_files[-1])
-            )[-1],
-            unit="s",
-        )
-        run_start_time = run_end_time
-    else:
-        run_start_time = pd.to_datetime(
-            sto.read(
-                "ch1027201/dsp/timestamp", os.path.join(folder_tier, run_files[0])
-            )[0],
-            unit="s",
-        )
-        run_end_time = pd.to_datetime(
-            sto.read(
-                "ch1027201/dsp/timestamp", os.path.join(folder_tier, run_files[-1])
-            )[-1],
-            unit="s",
-        )
-
-    return run_start_time, run_end_time
-
-
-def get_calib_data_dict(
-    calib_data: dict,
-    channel_info: list,
-    tiers: list,
-    pars: list,
-    period: str,
-    run: str,
-    tier: str,
-    key_result: str,
-    fit: str,
-    data_type: str,
-):
-    """
-    Extract calibration information for a given run and appends it to the provided dictionary.
-
-    This function loads calibration parameters for a specific detector channel and run,
-    parses energy calibration results and resolution information, and evaluates
-    derived values such as gain and calibration constants. It appends the extracted data
-    to the provided `calib_data` dictionary, which is expected to contain keys like
-    "fep", "fep_err", "cal_const", "cal_const_err", "run_start", "run_end", "res", and "res_quad".
-
-    Parameters
-    ----------
-    calib_data : dict
-        Dictionary that accumulates calibration results across runs.
-    channel_info : list
-        List of [channel ID, channel name].
-    tiers : list of str
-        Paths to tier data folders based on the inspected processed version.
-    pars : list of str
-        Paths to parameter .yaml/.json files.
-    period : str
-        Period to inspect.
-    run : str
-        Run to inspect.
-    tier : str
-        Tier level for the analysis ('hit', 'phy', etc.).
-    key_result : str
-        Key name used to extract the resolution results from the parsed file.
-    fit : str
-        Fitting method used for energy resolution, either 'linear' or 'quadratic'.
-    data_type : str
-    """
-    sto = lh5.LH5Store()
-    channel = channel_info[0]
-    channel_name = channel_info[1]
-
-    validity_file = os.path.join(pars[2 if tier == "hit" else 3], "validity.yaml")
-    with open(validity_file) as f:
-        validity_dict = yaml.load(f, Loader=yaml.CLoader)
-
-    # find first key of current run
-    run_path = os.path.join(tiers[2 if tier == "hit" else 3], data_type, period, run)
-    if not os.path.exists(run_path):
-        return calib_data
-    start_key = sorted(os.listdir(run_path))[0].split("-")[4]
-    # use key to load the right yaml file
-    valid_entries = [e for e in validity_dict if e["valid_from"] <= start_key]
-    if valid_entries:
-        apply = max(valid_entries, key=lambda e: e["valid_from"])["apply"][0]
-        run_to_apply = apply.split("/")[-1].split("-")[2]
-    else:
-        utils.logger.debug(
-            f"No valid calibration was found for {period}-{run}. Return."
-        )
-        return calib_data
-
-    folder_par = os.path.join(
-        pars[2 if tier == "hit" else 3], "cal", period, run_to_apply
-    )
-    pars_dict = get_calibration_file(folder_par)
-
-    if not all(k.startswith("ch") for k in pars_dict.keys()):
-        channel = channel_name
-
-    # retrieve calibration parameters
-    fep_peak_pos, fep_peak_pos_err, fep_gain, fep_gain_err = extract_fep_peak(
-        pars_dict, channel
-    )
-    Qbb_fwhm, Qbb_fwhm_quad = extract_resolution_at_q_bb(
-        pars_dict, channel, key_result, fit
-    )
-    fep_cal, fep_cal_err = evaluate_fep_cal(
-        pars_dict, channel, fep_peak_pos, fep_peak_pos_err
-    )
-
-    # get timestamp for additional-final cal run (only for FEP gain display)
-    run_start_time, run_end_time = get_run_start_end_times(
-        sto, tiers, period, run_to_apply, tier
-    )
-
-    calib_data["fep"].append(fep_gain)
-    calib_data["fep_err"].append(fep_gain_err)
-    calib_data["cal_const"].append(fep_cal)
-    calib_data["cal_const_err"].append(fep_cal_err)
-    calib_data["run_start"].append(run_start_time)
-    calib_data["run_end"].append(run_end_time)
-    calib_data["res"].append(Qbb_fwhm)
-    calib_data["res_quad"].append(Qbb_fwhm_quad)
-
-    return calib_data
-
-
-def add_calibration_runs(period: str | list, run_list: list | dict) -> list:
-    """
-    Add special calibration runs to the run list for a given period.
-
-    Parameters
-    ----------
-        period : str | list
-            Either a string or list of periods
-        run_list : list | dict
-            Either a list of runs or a dictionary with period keys
-    """
-    if isinstance(period, list) and isinstance(run_list, dict):
-        # multiple periods
-        for p in period:
-            if p in CALIB_RUNS and p in run_list:
-                run_list[p] = run_list[p] + CALIB_RUNS[p]
-    else:
-        # single period case
-        if period in CALIB_RUNS:
-            if isinstance(run_list, list):
-                run_list.extend(CALIB_RUNS[period])
-            else:
-                # run_list might be a dict but period is a string
-                if period in run_list:
-                    run_list[period] = run_list[period] + CALIB_RUNS[period]
-
-    return run_list
-
-
-def get_tier_keyresult(tiers: list):
-    """
-    Retrieve proper tier name (pht or hit) and key_result (partition_ecal or ecal) depending if partitioning data exists or not.
-
-    Parameters
-    ----------
-    tiers : list
-        Base directory containing the tier and parameter folders.
-    """
-    tier = "hit"
-    key_result = "ecal"
-    if os.path.isdir(tiers[1]):
-        if os.listdir(tiers[1]) != []:
-            tier = "pht"
-            key_result = "partition_ecal"
-
-    return tier, key_result
-
-
-def compute_diff(
-    values: np.ndarray, initial_value: float | int, scale: float | int
-) -> np.ndarray:
-    """
-    Compute relative differences with respect to an initial value. If the initial value is zero, returns an array of nan values.
-
-    Parameters
-    ----------
-    values : np.ndarray
-        Array of values to compute the differences for.
-    initial_value : float
-        Reference value for computing relative differences.
-    scale : float
-        Scaling factor.
-    """
-    if initial_value == 0:
-        return np.full_like(values, np.nan, dtype=float)
-
-    return (values - initial_value) / initial_value * scale
-
-
-def get_calib_pars(
-    path: str,
-    period: str | list,
-    run_list: list,
-    channel_info: list,
-    partition: bool,
-    data_type: str,
-    escale: float,
-    fit="linear",
-) -> dict:
-    """
-    Retrieve and process calibration parameters across a list of runs for a given channel.
-
-    This function loads calibration data from JSON/YAML files for each specified run, computes gain and calibration constant evolution over time, and returns a dictionary of relevant quantities, including their relative changes with respect to the initial values.
-    It optionally appends special calibration runs at the end of a period, if available.
-
-    Parameters
-    ----------
-    path : str
-        Base directory containing the tier and parameter folders.
-    period : str or list
-        Period to inspect. Can be a list if multiple periods are inspected.
-    run_list : list
-        List of run to inspect, or a dictionary mapping periods to lists of runs.
-    channel_info : list
-        List containing [channel ID, channel name].
-    partition : bool
-        True if you want to retrieve partition calibration results.
-    escale : float
-        Scaling factor used to compute relative differences in gain and calibration constant.
-    fit : str, optional
-        Fit method used for energy resolution ("linear" or "quadratic"), by default "linear".
-    """
-    # add special calib runs at the end of a period
-    run_list = add_calibration_runs(period, run_list)
-    run_list = [r for r in run_list if "old" not in str(r)]
-
-    calib_data = {
-        "fep": [],
-        "fep_err": [],
-        "cal_const": [],
-        "cal_const_err": [],
-        "run_start": [],
-        "run_end": [],
-        "res": [],
-        "res_quad": [],
-    }
-
-    tiers, pars = utils.get_tiers_pars_folders(path)
-
-    tier, key_result = get_tier_keyresult(tiers)
-
-    for run in run_list:
-        calib_data = get_calib_data_dict(
-            calib_data,
-            channel_info,
-            tiers,
-            pars,
-            period,
-            run,
-            tier,
-            key_result,
-            fit,
-            data_type,
-        )
-
-    for key, item in calib_data.items():
-        calib_data[key] = np.array(item)
-
-    init_cal_const, init_fep = 0, 0
-    for cal_, fep_ in zip(calib_data["cal_const"], calib_data["fep"]):
-        if init_fep == 0 and fep_ != 0:
-            init_fep = fep_
-        if init_cal_const == 0 and cal_ != 0:
-            init_cal_const = cal_
-
-    calib_data["cal_const_diff"] = compute_diff(
-        calib_data["cal_const"], init_cal_const, escale
-    )
-    calib_data["fep_diff"] = compute_diff(calib_data["fep"], init_fep, escale)
-
-    return calib_data
-
-
-def find_hdf_file(
-    directory: str, include: list[str], exclude: list[str] = None
-) -> str | None:
-    """
-    Find the original HDF monitoring file in a given directory, matching inclusion/exclusion filters.
-
-    Parameters
-    ----------
-    directory : str
-        Path to the folder containing the HDF monitoring files.
-    include: list[str]
-        List of words that the HDF monitoring file to retrieve must contain.
-    exclude: list[str] = None
-        List of words that the HDF monitoring file to retrieve must NOT contain.
-    """
-    exclude = exclude or []
-    files = os.listdir(directory)
-    candidates = [
-        f
-        for f in files
-        if f.endswith(".hdf")
-        and all(tag in f for tag in include)
-        and not any(tag in f for tag in exclude)
-    ]
-
-    return os.path.join(directory, candidates[0]) if candidates else None
-
-
-def read_if_key_exists(hdf_path: str, key: str) -> pd.DataFrame | None:
-    """
-    Read an HDF dataset if the key exists, otherwise return None; handle the case where the parameter is saved under either '/key' or 'key'.
-
-    Parameters
-    ----------
-    hdf_path : str
-        Path to the HDF file.
-    key : str
-        Key to inspect.
-    """
-    with pd.HDFStore(hdf_path, mode="r") as f:
-        try:
-            return f[key]
-        except KeyError:
-            try:
-                return f["/" + key]
-            except KeyError:
-                return None
-
-
-def get_dfs(phy_mtg_data: str, period: str, run_list: list, parameter: str):
-    """
-    Load and concatenate monitoring data from HDF files for a given period and list of runs.
-
-    Parameters
-    ----------
-    phy_mtg_data : str
-        Path to the base directory containing monitoring HDF5 files (typically ending in `/mtg/phy`).
-    period : str
-        Period to inspect.
-    run_list : list
-        List of available runs.
-    parameter : str
-        Parameter name used to construct the HDF key for loading specific datasets (e.g., 'TrapemaxCtcCal' looks for 'IsPulser_TrapemaxCtcCal').
-    """
-    # lists to accumulate dataframes, concatenated at the endo only
-    geds_df_cuspEmax_abs = []
-    geds_df_cuspEmax_abs_corr = []
-    puls_df_cuspEmax_abs = []
-
-    base_dir = os.path.join(phy_mtg_data, period)
-    runs = os.listdir(base_dir)
-    runs = [r for r in runs if re.fullmatch(r"r\d{3}", r)]
-
-    for r in runs:
-        if r not in run_list:
-            continue
-        run_dir = os.path.join(base_dir, r)
-
-        # geds file
-        hdf_geds = find_hdf_file(run_dir, include=["geds"], exclude=["res", "min"])
-        if hdf_geds:
-            geds_abs = read_if_key_exists(hdf_geds, f"IsPulser_{parameter}")
-            if geds_abs is not None:
-                geds_df_cuspEmax_abs.append(geds_abs)
-
-            geds_puls_abs = read_if_key_exists(
-                hdf_geds, f"IsPulser_{parameter}_pulser01anaDiff"
-            )
-            if geds_puls_abs is not None:
-                geds_df_cuspEmax_abs_corr.append(geds_puls_abs)
-        else:
-            utils.logger.debug("...hdf_geds missing in %s", r)
-
-        # pulser file
-        hdf_puls = find_hdf_file(
-            run_dir, include=["pulser01ana"], exclude=["res", "min"]
-        )
-        if hdf_puls:
-            puls_abs = read_if_key_exists(hdf_puls, f"IsPulser_{parameter}")
-            if puls_abs is not None:
-                puls_df_cuspEmax_abs.append(puls_abs)
-        else:
-            utils.logger.debug("...hdf_puls missing in %s", r)
-
-    if (
-        not geds_df_cuspEmax_abs
-        and not geds_df_cuspEmax_abs_corr
-        and not puls_df_cuspEmax_abs
-    ):
-        return None, None, None
-    else:
-        return (
-            (
-                pd.concat(geds_df_cuspEmax_abs, ignore_index=False, axis=0)
-                if geds_df_cuspEmax_abs
-                else pd.DataFrame()
-            ),
-            (
-                pd.concat(geds_df_cuspEmax_abs_corr, ignore_index=False, axis=0)
-                if geds_df_cuspEmax_abs_corr
-                else pd.DataFrame()
-            ),
-            (
-                pd.concat(puls_df_cuspEmax_abs, ignore_index=False, axis=0)
-                if puls_df_cuspEmax_abs
-                else pd.DataFrame()
-            ),
-        )
-
-
-def get_traptmax_tp0est(phy_mtg_data: str, period: str, run_list: list):
-    """
-    Load and concatenate trapTmax and tp0est data from HDF files for a given period and list of runs.
-
-    Parameters
-    ----------
-    phy_mtg_data : str
-        Path to the base directory containing monitoring HDF5 files (typically ending in `/mtg/phy`).
-    period : str
-        Period to inspect.
-    run_list : list
-        List of available runs.
-    """
-    geds_df_trapTmax, geds_df_tp0est = [], []
-    puls_df_trapTmax, puls_df_tp0est = [], []
-
-    base_dir = os.path.join(phy_mtg_data, period)
-    for r in os.listdir(base_dir):
-        if r not in run_list:
-            continue
-        run_dir = os.path.join(base_dir, r)
-
-        # geds
-        hdf_geds = find_hdf_file(run_dir, include=["geds"], exclude=["res", "min"])
-        if hdf_geds:
-            trapTmax = read_if_key_exists(hdf_geds, "IsPulser_TrapTmax")
-            if trapTmax is not None:
-                geds_df_trapTmax.append(trapTmax)
-
-            tp0est = read_if_key_exists(hdf_geds, "IsPulser_Tp0Est")
-            if tp0est is not None:
-                geds_df_tp0est.append(tp0est)
-
-        # pulser
-        hdf_puls = find_hdf_file(
-            run_dir, include=["pulser01ana"], exclude=["res", "min"]
-        )
-        if hdf_puls:
-            trapTmax = read_if_key_exists(hdf_puls, "IsPulser_TrapTmax")
-            if trapTmax is not None:
-                puls_df_trapTmax.append(trapTmax)
-
-            tp0est = read_if_key_exists(hdf_puls, "IsPulser_Tp0Est")
-            if tp0est is not None:
-                puls_df_tp0est.append(tp0est)
-
-    return (
-        (
-            pd.concat(geds_df_trapTmax, ignore_index=False)
-            if geds_df_trapTmax
-            else pd.DataFrame()
-        ),
-        (
-            pd.concat(geds_df_tp0est, ignore_index=False)
-            if geds_df_tp0est
-            else pd.DataFrame()
-        ),
-        (
-            pd.concat(puls_df_trapTmax, ignore_index=False)
-            if puls_df_trapTmax
-            else pd.DataFrame()
-        ),
-        (
-            pd.concat(puls_df_tp0est, ignore_index=False)
-            if puls_df_tp0est
-            else pd.DataFrame()
-        ),
-    )
-
-
-def filter_series_by_ignore_keys(
-    series_to_filter: pd.Series, skip_keys: dict, period: str
-):
-    """
-    Remove data from a time-indexed pandas Series that falls within time ranges specified by start and stop timestamps for a given period.
-
-    Parameters
-    ----------
-    series_to_filter : pd.Series
-        The time-indexed pandas Series to be filtered.
-    skip_keys : dict
-        Dictionary mapping periods to sub-dictionaries containing 'start_keys' and 'stop_keys' lists with timestamp strings in the format '%Y%m%dT%H%M%S%z'.
-    period : str
-        The period to check for keys to ignore. If not present, the series is returned unmodified.
-    """
-    if period not in skip_keys:
-        return series_to_filter
-
-    start_keys = skip_keys[period]["start_keys"]
-    stop_keys = skip_keys[period]["stop_keys"]
-
-    for ki, kf in zip(start_keys, stop_keys):
-        isolated_ki = pd.to_datetime(ki.replace("Z", "+0000"), format="%Y%m%dT%H%M%S%z")
-        isolated_kf = pd.to_datetime(kf.replace("Z", "+0000"), format="%Y%m%dT%H%M%S%z")
-        series_to_filter = series_to_filter[
-            (series_to_filter.index < isolated_ki)
-            | (series_to_filter.index > isolated_kf)
-        ]
-
-    return series_to_filter
-
-
-def filter_by_period(series: pd.Series, period: str | list) -> pd.Series:
-    """
-    Return a series filtered by ignore keys for the given period(s).
-
-    Parameters
-    ----------
-    series : pd.Series
-        Input time series (indexed by timestamps) to filter.
-    period : str or list
-        Period (or list of periods) to inspect.
-    """
-    if isinstance(period, list):
-        for p in period:
-            series = filter_series_by_ignore_keys(series, IGNORE_KEYS, p)
-    else:
-        series = filter_series_by_ignore_keys(series, IGNORE_KEYS, period)
-
-    return series
-
-
-def compute_diff_and_rescaling(
-    series: pd.Series, reference: float, escale: float, variations: bool
-):
-    """
-    Compute relative differences (if 'variations' is True) and rescale values by 'escale'.
-
-    Parameters
-    ----------
-    series : pd.Series
-        Input time series of numerical values.
-    reference : float
-        Reference value used to compute relative differences.
-    escale : float
-        Scaling factor, eg 2039 keV.
-    variations : bool
-        If true, compute relative difference (series - reference)/reference.
-    """
-    if variations:
-        diff = (series - reference) / reference
-    else:
-        diff = series.copy()
-
-    return diff, diff * escale
-
-
-def resample_series(series: pd.Series, resampling_time: str, mask: pd.Series):
-    """
-    Calculate mean/std for resampled time ranges to which a mask is then applied. The function already adds UTC timezones to the series.
-
-    Parameters
-    ----------
-    series : pd.Series
-        Input time series of numerical values.
-    resampling_time : str
-        Resampling frequency, eg '1h'.
-    mask : pd.Series
-        Boolean mask aligned to the datetime index; false values mark timestamps that should be excluded, ie set to nan value.
-    """
-    mean = series.resample(resampling_time).mean()
-    std = series.resample(resampling_time).std()
-
-    # add UTC timezone
-    if mean.index.tz is None:
-        mean = mean.tz_localize("UTC")
-        std = std.tz_localize("UTC")
-    # different timezone, convert to UTC
-    elif mean.index.tz != pytz.UTC:
-        mean = mean.tz_convert("UTC")
-        std = std.tz_convert("UTC")
-
-    # ensure mask has the same timezone as the resampled series
-    if not mask.index.tz:
-        mask = mask.tz_localize("UTC")
-
-    # set to nan when the mask is False
-    mask = mask.reindex(mean.index, fill_value=False)
-    mean[~mask] = np.nan
-    std[~mask] = np.nan
-
-    return mean, std
-
-
-def get_pulser_data(
-    resampling_time: str,
-    period: str | list,
-    dfs: list,
-    channel: str,
-    escale: float,
-    variations=False,
-) -> dict:
-    """
-    Return a dictionary of geds and pulser filtered dataframes for which a time resampling is performed.
-
-    Parameters
-    ----------
-    resampling_time : str
-        Resampling time, eg '1HH' or '10T'.
-    period : str | list
-        Period or list of periods to inspect.
-    dfs : list
-        List of dataframes for geds and pulser events.
-    channel : str
-        Channel to inspect.
-    escale : float
-        Scaling factor used to compute relative differences in gain and calibration constant.
-    variations : bool
-        True if you want to retrieve % variations (default: False).
-    """
-    # geds
-    ser_ged_cusp = dfs[0][channel].sort_index()
-    ser_ged_cusp = filter_by_period(ser_ged_cusp, period)
-    ser_ged_cusp = ser_ged_cusp[
-        ~ser_ged_cusp.index.duplicated(keep="first")
-    ]  # remove duplicates
-    ser_pul_tp0est_new = pd.DataFrame()
-
-    if ser_ged_cusp.empty:
-        utils.logger.debug("...geds series is empty after filtering")
-        return None
-
-    # check if these dfs are empty or not - if not, then remove spikes
-    if isinstance(dfs[6], pd.DataFrame) and not dfs[6].empty:
-        ser_pul_tp0est = dfs[6][1027203].sort_index()
-        ser_pul_tp0est = filter_by_period(ser_pul_tp0est, period)
-        ser_pul_tp0est = ser_pul_tp0est[
-            ~ser_pul_tp0est.index.duplicated(keep="first")
-        ]  # remove duplicates
-
-        low_lim = 4.8e4
-        upp_lim = 5.0e4
-        mask = (ser_pul_tp0est > low_lim) & (ser_pul_tp0est < upp_lim)
-        ser_pul_tp0est_new = ser_pul_tp0est[mask]
-
-        if not ser_pul_tp0est_new.empty:
-            valid_idx = ser_ged_cusp.index.intersection(ser_pul_tp0est_new.index)
-            ser_ged_cusp = ser_ged_cusp.reindex(valid_idx)
-
-    # if before, potential mismatches with ser_pul_tp0est
-    ser_ged_cusp = ser_ged_cusp.dropna()
-    # compute average over the first 10% of elements
-    n_elements = max(int(len(ser_ged_cusp) * 0.10), 1)
-    ged_cusp_av = np.nanmean(ser_ged_cusp.iloc[:n_elements])
-    if np.isnan(ged_cusp_av):
-        utils.logger.debug("...the geds average is NaN")
-        return None
-
-    ser_ged_cuspdiff, ser_ged_cuspdiff_kev = compute_diff_and_rescaling(
-        ser_ged_cusp, ged_cusp_av, escale, variations
-    )
-
-    # hour counts masking
-    mask = ser_ged_cusp.resample(resampling_time).count() > 0
-
-    # resample geds series
-    ged_cusp_hr_av, ged_cusp_hr_std = resample_series(
-        ser_ged_cuspdiff_kev, resampling_time, mask
-    )
-    ged_index = ged_cusp_hr_av.index
-
-    # pulser series
-    ser_pul_cusp = ser_pul_cuspdiff = ser_pul_cuspdiff_kev = pul_cusp_hr_av = (
-        pul_cusp_hr_std
-    ) = None
-    ged_cusp_corr = ged_cusp_corr_kev = ged_cusp_cor_hr_av = ged_cusp_cor_hr_std = None
-    # ...if pulser is available:
-    if not dfs[2].empty:
-        ser_pul_cusp = dfs[2][1027203].sort_index()
-        ser_pul_cusp = ser_pul_cusp[
-            ~ser_pul_cusp.index.duplicated(keep="first")
-        ]  # remove duplicates
-        ser_pul_cusp = filter_by_period(ser_pul_cusp, period)
-
-        # pulser average and diffs
-        if not ser_pul_cusp.empty:
-            # check if these dfs are empty or not - if not, then remove spikes
-            if isinstance(dfs[6], pd.DataFrame) and not dfs[6].empty:
-                if not ser_pul_tp0est_new.empty:
-                    valid_idx = ser_pul_cusp.index.intersection(
-                        ser_pul_tp0est_new.index
-                    )
-                    ser_pul_cusp = ser_pul_cusp.reindex(valid_idx)
-
-            # if before, potential mismatches with ser_pul_tp0est
-            ser_pul_cusp = ser_pul_cusp.dropna()
-            n_elements_pul = max(int(len(ser_pul_cusp) * 0.10), 1)
-            pul_cusp_av = np.nanmean(ser_pul_cusp.iloc[:n_elements_pul])
-            ser_pul_cuspdiff, ser_pul_cuspdiff_kev = compute_diff_and_rescaling(
-                ser_pul_cusp, pul_cusp_av, escale, variations
-            )
-
-            pul_cusp_hr_av, pul_cusp_hr_std = resample_series(
-                ser_pul_cuspdiff_kev, resampling_time, mask
-            )
-            pul_cusp_hr_av = pul_cusp_hr_av.reindex(ged_index)
-            pul_cusp_hr_std = pul_cusp_hr_std.reindex(ged_index)
-
-            # corrected GED
-            common_index = ser_ged_cuspdiff.index.intersection(ser_pul_cuspdiff.index)
-            ged_cusp_corr = (
-                ser_ged_cuspdiff[common_index] - ser_pul_cuspdiff[common_index]
-            )
-            ged_cusp_corr_kev = ged_cusp_corr * escale
-            ged_cusp_cor_hr_av, ged_cusp_cor_hr_std = resample_series(
-                ged_cusp_corr_kev, resampling_time, mask
-            )
-            ged_cusp_cor_hr_av = ged_cusp_cor_hr_av.reindex(ged_index)
-            ged_cusp_cor_hr_std = ged_cusp_cor_hr_std.reindex(ged_index)
-
-    return {
-        "ged": {
-            "cusp": ser_ged_cusp,
-            "cuspdiff": ser_ged_cuspdiff,
-            "cuspdiff_kev": ser_ged_cuspdiff_kev,
-            "kevdiff_av": ged_cusp_hr_av,
-            "kevdiff_std": ged_cusp_hr_std,
-        },
-        "pul_cusp": {
-            "raw": ser_pul_cusp,
-            "rawdiff": ser_pul_cuspdiff,
-            "kevdiff": ser_pul_cuspdiff_kev,
-            "kevdiff_av": pul_cusp_hr_av,
-            "kevdiff_std": pul_cusp_hr_std,
-        },
-        "diff": {
-            "raw": None,
-            "rawdiff": ged_cusp_corr,
-            "kevdiff": ged_cusp_corr_kev,
-            "kevdiff_av": ged_cusp_cor_hr_av,
-            "kevdiff_std": ged_cusp_cor_hr_std,
-        },
-    }
-
-
 def build_new_files(generated_path: str, period: str, run: str, data_type="phy"):
     """
     Generate and store resampled HDF files for a given data run and extract summary info.
@@ -2195,7 +1215,7 @@ def build_new_files(generated_path: str, period: str, run: str, data_type="phy")
 
     if not os.path.exists(data_file):
         utils.logger.debug(f"File not found: {data_file}. Exit here.")
-        sys.exit()
+        raise errors.DataError("build_new_files failed (see log for details)")
 
     with h5py.File(data_file, "r") as f:
         my_keys = list(f.keys())
@@ -2334,6 +1354,7 @@ def plot_time_series(
     zoom : bool
         True to zoom over y axis; default: False.
     """
+    apply_monitoring_style()
     avail_runs = []
     for entry in runs:
         new_entry = entry.replace(",", "").replace("[", "").replace("]", "")
@@ -2798,6 +1819,8 @@ def plot_time_series(
                                     threshold,
                                     info[inspected_parameter]["title"],
                                     output,
+                                    period=period,
+                                    run=current_run,
                                 )
 
                             # PULS01ANA has a signal - we can correct GEDS energies for it!

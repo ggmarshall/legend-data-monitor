@@ -54,7 +54,17 @@ def main():
         )
         sys.exit()
 
-    args.func(args)
+    # exit-code policy (the CLI is the only place allowed to call sys.exit):
+    #   0 ok / 1 task or pipeline failure / 2 config or environment error
+    try:
+        exit_code = args.func(args)
+    except legend_data_monitor.errors.ConfigError as exc:
+        legend_data_monitor.utils.logger.error("Configuration error: %s", exc)
+        sys.exit(2)
+    except legend_data_monitor.errors.MonitoringError as exc:
+        legend_data_monitor.utils.logger.error("%s: %s", type(exc).__name__, exc)
+        sys.exit(1)
+    sys.exit(exit_code if isinstance(exit_code, int) else 0)
 
 
 def add_user_scdb(subparsers):
@@ -205,6 +215,11 @@ def add_auto_run_parser(subparsers):
         description="""Inspect LEGEND HDF5 (LH5) processed data (and Slow Control data from lngs-login cluster) for a specific period and run (if specified; otherwise the latest being processed are used); plots and summary files are saved; automatic alert emails are sent.""",
     )
     parser_auto_run.add_argument(
+        "--prod_root",
+        default=None,
+        help="Override the cluster-mapped production root with an explicit path (useful for local/mock trees).",
+    )
+    parser_auto_run.add_argument(
         "--cluster",
         default="lngs",
         help="Name of the cluster where you are working; pick among 'lngs' (default) or 'nersc'.",
@@ -294,7 +309,7 @@ def auto_run_cli(args):
     escale_val = args.escale
     data_type = args.data_type
 
-    legend_data_monitor.automatic_run.auto_run(
+    return legend_data_monitor.automatic_run.auto_run(
         cluster,
         ref_version,
         output_folder,
@@ -309,6 +324,7 @@ def auto_run_cli(args):
         save_pdf,
         escale_val,
         data_type,
+        prod_root=args.prod_root,
     )
 
 

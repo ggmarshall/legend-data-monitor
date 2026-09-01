@@ -3,6 +3,7 @@ import json
 import pandas as pd
 import pytest
 
+from legend_data_monitor import errors
 from legend_data_monitor.monitoring import build_new_files
 
 
@@ -63,5 +64,5 @@ def test_build_new_files_missing_file(tmp_path):
     # the file does not exist
     period = "p01"
     run = "r001"
-    with pytest.raises(SystemExit):
+    with pytest.raises(errors.DataError):
         build_new_files(str(tmp_path), period, run)
