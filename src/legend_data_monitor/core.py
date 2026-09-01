@@ -365,9 +365,13 @@ def make_plots(config: dict, plt_path: str, saving: str, render: bool = True):
         # without this each one would re-read the tier
         aux_params = []
         for plot in config["subsystems"][system].values():
+            # only plots that merge the aux channel will ever read it
+            if not (plot.get("AUX_ratio") or plot.get("AUX_diff")):
+                continue
             params = plot["parameters"]
             aux_params += [params] if isinstance(params, str) else list(params)
-        subsystem.prewarm_aux("pulser01ana", config["dataset"], aux_params)
+        if aux_params:
+            subsystem.prewarm_aux("pulser01ana", config["dataset"], aux_params)
 
         for plot in config["subsystems"][system].keys():
             # !!! add if for sipms...

@@ -444,8 +444,8 @@ def plot_heatmap(
         .reset_index(drop=True)
     )
 
-    # make sure the datetime column is in UTC
-    new_df["datetime"] = pd.to_datetime(new_df["datetime"]).dt.tz_localize("UTC")
+    # make sure the datetime column is in UTC (tz-aware input stays aware)
+    new_df["datetime"] = pd.to_datetime(new_df["datetime"], utc=True)
     # convert to numeric values for plotting
     x_values = pd.to_numeric(
         new_df["datetime"].dt.tz_convert("UTC").dt.to_pydatetime()
