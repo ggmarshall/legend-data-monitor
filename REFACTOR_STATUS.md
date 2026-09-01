@@ -415,6 +415,47 @@ r012, so array records attach no plots elsewhere.
   `contract.build.refresh_manifest()` re-inventories from the files, and both
   post-build writers call it. All 14 p22 manifests rebuilt: 69 spms keys each.
 
+## Muon veto (pmts) contract flavour (2026-08-31)
+
+Producer side of the phy-dash request in
+`/data1/users/marshall/phy-dash/pmts-contract-spec.md`: the dashboard's dead
+Muon page gets rebuilt on contract keys the way the SiPM page was.
+
+- 53 PMTs (pillbox 10 / floor 20 / wall 23). The channel map's `location` is a
+  plain string (not the geds/spms dict) and there is no `analysis` block —
+  usability/processable come from `datasets/statuses` (52 on / 1 off on p22).
+- **The pmts dsp stream is sparse**: one row per muon-DAQ trigger (~0.08 Hz),
+  and its timestamps match no other subsystem, so pulser/FCbsln/muon flags
+  cannot attach (the flaggers already degrade to all-False on a timestamp
+  mismatch); everything runs on `all` events (`settings/pmts-dict.yaml`:
+  bl_mean var, bl_sig, pulseHeight, max/mean_peak_height, containsPulse,
+  event_rate; grouped `per string` = per location).
+- Contract flavour via the existing subsystem machinery: `pmts` added to
+  `schema.SUBSYSTEMS` (refresh_contract picks it up), detector map
+  `name/rawid/location/processable/usability`, `utils.build_pmts_info`.
+- **Two spec adaptations, both from the data**: this production has **no
+  `evt_muon` group** anywhere (that list is from a dev processing), and the
+  PMT triggers share zero timestamps with the geds evt stream. So
+  `muon_veto/<run>` is derived from what exists: muon-DAQ trigger rate,
+  per-trigger multiplicity (PMTs with `containsPulse`) and summed light (LSB)
+  from the dsp rows themselves, plus ge-coincidence fractions from
+  `evt/coincident/muon(_offline)`. `_dist` keys for multiplicity and light
+  sum, and the per-PMT `hist/All_Pulseheight_dist2d` (500 bins over a fixed
+  (0,100) LSB — the SPP-position analogue of the SiPM SPE spectra; unmasked,
+  no `containsPulse` cut) land in the pmts contract. New `muon_summary` task.
+- On p22/r012: 0.08 Hz, multiplicity median 4, light sum ~80 LSB,
+  ge-coincidence 0.6-0.7 % (offline flag all zero).
+- **p22 backfill DONE 2026-09-01 03:09 UTC**, validated 14/14: pmts contracts
+  ~62 MB each (manifest now lists three files per run), `muon_veto/<run>` x14.
+  Rate 0.088-0.092 Hz on quiet runs; r000/r004/r011 elevated (0.11-0.13 Hz,
+  r004 coincides with the SiPM noise burst); ge-coincidence stable 0.60-0.62 %.
+  Producer response for the dashboard left at
+  `/data1/users/marshall/phy-dash/pmts-contract-landed.md`. v1 pmts files are
+  ~90 MB/run (a 1-min pivot of a sparse stream) -- strip/compact candidate.
+- Also fixed on the way: a PMT absent from a file raises `LH5DecodeError`
+  under current lh5 — now caught in the direct loader too (the old
+  `KeyError/ValueError` catch predates it).
+
 ## Remaining
 
 1. ~~**Pickled-figure shelve writers**~~ **DONE (2026-08-20)**, see above. Was:
