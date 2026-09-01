@@ -363,20 +363,25 @@ def make_plots(config: dict, plt_path: str, saving: str, render: bool = True):
         # one pass for every parameter the plots will ask of the aux channel:
         # include_aux is called per plot, each with a different parameter, so
         # without this each one would re-read the tier
-        aux_params = []
-        for plot in config["subsystems"][system].values():
-            params = plot["parameters"]
-            aux_params += [params] if isinstance(params, str) else list(params)
-        subsystem.prewarm_aux("pulser01ana", config["dataset"], aux_params)
+        # the pulser01ana reference is a geds concept: SiPMs see no pulser
+        if system == "geds":
+            aux_params = []
+            for plot in config["subsystems"][system].values():
+                # only plots that merge the aux channel will ever read it
+                if not (plot.get("AUX_ratio") or plot.get("AUX_diff")):
+                    continue
+                params = plot["parameters"]
+                aux_params += [params] if isinstance(params, str) else list(params)
+            if aux_params:
+                subsystem.prewarm_aux("pulser01ana", config["dataset"], aux_params)
 
-        for plot in config["subsystems"][system].keys():
-            # !!! add if for sipms...
-            subsystems[system].include_aux(
-                config["subsystems"][system][plot]["parameters"],
-                config["dataset"],
-                config["subsystems"][system][plot],
-                "pulser01ana",
-            )
+            for plot in config["subsystems"][system].keys():
+                subsystems[system].include_aux(
+                    config["subsystems"][system][plot]["parameters"],
+                    config["dataset"],
+                    config["subsystems"][system][plot],
+                    "pulser01ana",
+                )
 
         # -------------------------------------------------------------------------
         # flag events (FOR ALL SYSTEMS)

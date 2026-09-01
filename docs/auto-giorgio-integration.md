@@ -30,7 +30,8 @@ Per unattended invocation (`legend-data-monitor auto_run`):
   (`warning|alert`), `detector`/`rawid`/`string`/`position`, `metric`,
   `observed`, `threshold` `[low, high]`, `unit`, `window`,
   `excursion {frac_out, max_deviation, longest_s, recovered}`,
-  `first_seen_run`, `data_ref {file, key}` (contract-v2 HDF + hist key),
+  `first_seen_run`, `reference` (band centre, when the evaluator has one),
+  `data_ref {file, key}` (contract-v2 HDF + hist key),
   `raw_ref {tier_dir, channel, param, timestamps}` (provenance into the
   production LH5 tree for event-level triage), `plots []` (absolute paths),
   `suggested_action`. Fields the evaluator could not supply are omitted, so
@@ -56,6 +57,47 @@ Per unattended invocation (`legend-data-monitor auto_run`):
   period file (`l200-<p>-{phy,cal}-monitoring.hdf`, e.g.
   `qc_rate_series/IsDischarge/<run>`, `fep_gain_stab/<run>`,
   `psd_stability/<run>/<det>`) as well as the run contract.
+- **SiPM metrics** (2026-08-21): `spms_baseln_stab`, `spms_noise_stab`,
+  `spms_dark_rate`, `spms_noisy_frac` are graded on the 60 min bins of the
+  spms contract (`l200-<p>-<r>-phy-spms-schema2.hdf`, which `data_ref`
+  points at) and carry excursions (hourly). Their `detector` is a SiPM name
+  (`S0NN`); `string`/`position` are absent (the schema keeps them as
+  germanium integers) — use the contract's `/detector_map` for barrel, fiber
+  and top/bottom. `plots[]` attach the barrel-side figures. LAr veto
+  metrics: `spms_occupancy` per SiPM, and `lar_veto_frac`/`lar_accidental_frac`
+  under the pseudo-detector `LAr` (no rawid); `data_ref` points at the period
+  keys `lar_occupancy/<run>` / `lar_veto/<run>`.
+- **Array-wide events collapse** (2026-08-22): when one metric fails on at
+  least 30 % of the detectors it was evaluated on (and on at least 5 of them),
+  the per-detector records are replaced by **one** record for the whole
+  array — that is a common-mode event (noise burst, DAQ/HV excursion), not
+  that many independent detector problems. Such a record has
+  `detector` = `spms-array` / `geds-array` (a pseudo-detector, so `issue_id`
+  stays a stable dedup key), no `rawid`/`string`/`position`, and two extra
+  fields: `affected_detectors` (the full roster) and `affected_frac` (their
+  share of the evaluated detectors). Its magnitudes are the worst member's and
+  its `first_seen_run` the earliest of the group; `suggested_action` names the
+  worst channel and points at common-mode causes. Normal per-detector failure
+  rates (cal metrics fail on 10-25 % of the array in a good run) never
+  collapse. Consumers keying on `detector` should expect these names alongside
+  the run-level `LAr` pseudo-detector.
+- **Resolution is graded one-sided** (2026-08-22): `escale_fwhm_FEP` and
+  `escale_fwhm_583` now fail only when the FWHM is *above* the band — an
+  improved resolution is not an issue and no longer raises one. Their
+  `threshold` is therefore `[null, upper]`, and severity uses `reference`
+  (the band centre) for the half-width, so a genuinely degraded detector can
+  still reach `alert`. Two-sided metrics (`escale_FEP_pos`,
+  `escale_SEP_residual`, `AoE_stab`, the SiPM bands) are unchanged: for those
+  a departure in either direction is real.
+- **SiPM SPE spectra** (2026-08-23): `hist/<flag>_EnergyInPe_dist2d` in the
+  spms contract holds every pulse energy per SiPM (250 bins, 0-5 p.e.), for
+  forced triggers (`IsBsln`) and physics events (`IsPhysics`). A valid PE
+  calibration puts the 1 p.e. peak at exactly 1.0, so the centroid offset is
+  the gain drift. Pulses are **unmasked** (`is_valid_hit` not applied, as the
+  `selection` attr records) because the validity threshold sits below 1 p.e.;
+  consumers must therefore start any peak search above that channel's
+  `threshold_a` from `spms_calibration/<run>`, or the sub-threshold noise edge
+  is mistaken for the peak.
 - Exit codes: 0 all tasks ok; 1 ≥1 task failed (others still ran); 2
   config/environment error.
 

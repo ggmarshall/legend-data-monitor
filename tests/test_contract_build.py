@@ -135,3 +135,89 @@ def test_keys_filter_refreshes_in_place(tmp_path):
     assert "IsPulser_BlMean_mean" in keys
     with h5py.File(v2, "r") as f:
         assert f["hist/IsPulser_BlMean/1min/storage/values"].dtype == np.float32
+
+
+def _make_spms_v1_file(tmp_path, period="p19", run="r001"):
+    run_dir = tmp_path / "generated/plt/hit/phy" / period / run
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / f"l200-{period}-{run}-phy-spms.hdf"
+    idx = pd.date_range("2026-07-01", periods=60, freq="20s", tz="UTC")
+    df = pd.DataFrame(
+        np.random.default_rng(1).poisson(0.2, (60, 2)).astype("float32"),
+        index=idx,
+        columns=[1064000, 1064001],
+    )
+    df.index.name = "datetime"
+    df.to_hdf(path, key="IsBsln_NPulses", mode="a")
+    df.mean().to_frame().T.to_hdf(path, key="IsBsln_NPulses_mean", mode="a")
+    return run_dir
+
+
+def test_spms_flavour_shares_the_manifest(tmp_path, monkeypatch):
+    from legend_data_monitor import utils
+    from legend_data_monitor.contract import writer
+
+    root, run_dir = _make_v1_file(tmp_path)
+    _make_spms_v1_file(tmp_path)
+    spms_info = {
+        "S060": {
+            "daq_rawid": 1064000,
+            "barrel": "IB",
+            "fiber": "IB015016",
+            "position": "top",
+            "processable": True,
+            "usability": "on",
+        },
+        "S061": {
+            "daq_rawid": 1064001,
+            "barrel": "IB",
+            "fiber": "IB015016",
+            "position": "bottom",
+            "processable": True,
+            "usability": "on",
+        },
+    }
+    monkeypatch.setattr(utils, "build_spms_info", lambda path: spms_info)
+    geds_info = {
+        "detectors": {
+            name: {
+                "daq_rawid": rawid,
+                "string": 1,
+                "position": pos,
+                "processable": True,
+                "usability": "on",
+                "mass_in_kg": 1.0,
+            }
+            for name, rawid, pos in [("V01234A", 1104000, 1), ("V05678B", 1104001, 2)]
+        }
+    }
+    monkeypatch.setattr(utils, "build_detector_info", lambda path: geds_info)
+
+    build.build_all_contract_files(root, "p19", "r001", metadata_path="meta")
+    manifest = reader.read_manifest(str(run_dir), "p19", "r001")
+    assert set(manifest["files"]) == {
+        "l200-p19-r001-phy-geds-schema2.hdf",
+        "l200-p19-r001-phy-spms-schema2.hdf",
+    }
+    spms_file = str(run_dir / "l200-p19-r001-phy-spms-schema2.hdf")
+    keys = manifest["files"]["l200-p19-r001-phy-spms-schema2.hdf"]["keys"]
+    assert {"hist/IsBsln_NPulses/1min", "IsBsln_NPulses_mean", "detector_map"} <= set(
+        keys
+    )
+    det_map = pd.read_hdf(spms_file, "detector_map")
+    assert (
+        list(det_map.columns) == ["name", "rawid"] + writer.DETECTOR_MAP_COLUMNS["spms"]
+    )
+    assert list(det_map["barrel"]) == ["IB", "IB"]
+    binned = reader.read_binned_series(spms_file, "IsBsln", "NPulses", "1min")
+    assert binned.detectors == ["S060", "S061"]
+
+    # rebuilding one subsystem keeps the other's manifest entry
+    build.build_contract_files(root, "p19", "r001", subsystem="spms")
+    manifest = reader.read_manifest(str(run_dir), "p19", "r001")
+    assert len(manifest["files"]) == 2
+
+
+def test_param_attrs_take_subsystem_limits():
+    attrs = build._param_attrs("IsBsln_WfMode_var", "spms")
+    assert attrs["unit"] == "%" and attrs["limits"] == [None, None]

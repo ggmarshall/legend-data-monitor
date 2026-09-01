@@ -211,6 +211,34 @@ def fill_distribution_2d(
     return hist
 
 
+def empty_distribution_2d(
+    n_bins: int = 100, value_range: tuple = (0.0, 1.0)
+) -> bh.Histogram:
+    """
+    Empty Regular x StrCategory histogram to fill incrementally.
+
+    Same layout as :func:`fill_distribution_2d`, for callers that see their
+    values a detector at a time (and never hold them all at once) rather than
+    as one pivot frame.
+
+    Parameters
+    ----------
+    n_bins : int
+        Number of value bins.
+    value_range : tuple
+        (lo, hi) value axis range.
+
+    Returns
+    -------
+    hist: boost_histogram.Histogram
+        Empty histogram; fill with ``hist.fill(values, name)``.
+    """
+    return bh.Histogram(
+        bh.axis.Regular(n_bins, *value_range),
+        bh.axis.StrCategory([], growth=True),
+    )
+
+
 def frame_to_binned(
     df: pd.DataFrame,
     cadence: str = schema.BASE_CADENCE,

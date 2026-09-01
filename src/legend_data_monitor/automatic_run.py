@@ -10,6 +10,7 @@ import yaml
 from . import calibration, core, errors, logs, monitoring, repack, tasks, utils
 from .contract import build as contract_build
 from .contract import reader as contract_reader
+from .contract import schema as contract_schema
 from .plots import calib as calib_plots
 from .plots import qc as qc_plots_mod
 from .plots import stability as stability_plots
@@ -133,8 +134,11 @@ def auto_run(
     }
 
     pkg = importlib.resources.files("legend_data_monitor")
-    with open(pkg / "settings" / "geds-dict.yaml") as f:
-        geds_dict = yaml.load(f, Loader=yaml.CLoader)
+    # one plot dictionary per subsystem; each produces its own v1 + contract file
+    subsystems_dict = {}
+    for name in ("geds-dict.yaml", "spms-dict.yaml"):
+        with open(pkg / "settings" / name) as f:
+            subsystems_dict |= yaml.load(f, Loader=yaml.CLoader)
 
     # define geds dict
     my_config = {
@@ -148,7 +152,7 @@ def auto_run(
             "runs": int(run.split("r")[-1]),
         },
         "saving": "append",
-        "subsystems": geds_dict,
+        "subsystems": subsystems_dict,
     }
 
     phy_folder = os.path.join(
@@ -246,13 +250,57 @@ def auto_run(
     def task_build_monitoring_hdf(logger=None):
         files_folder = os.path.join(output_folder, ref_version)
         monitoring.build_new_files(files_folder, period, run, data_type=data_type)
-        contract_build.build_contract_files(
+        contract_build.build_all_contract_files(
             files_folder,
             period,
             run,
             metadata_path=os.path.join(auto_dir_path, "inputs"),
             data_type=data_type,
         )
+        monitoring.write_spms_production_keys(
+            phy_folder,
+            period,
+            run,
+            auto_dir_path,
+            start_key=utils.get_start_key(auto_dir_path, data_type, period, run),
+            data_type=data_type,
+        )
+
+    def task_lar_summary(logger=None):
+        """Summarise the LAr veto performance of the run from the evt tier (~20 s)."""
+        evt_dir = os.path.join(
+            auto_dir_path, "generated/tier/evt", data_type, period, run
+        )
+        files = sorted(glob.glob(os.path.join(evt_dir, "*.lh5")))
+        if not files:
+            utils.logger.info("...no evt files for %s/%s; no LAr summary", period, run)
+            return
+        names = {
+            info["daq_rawid"]: name
+            for name, info in utils.build_spms_info(
+                os.path.join(auto_dir_path, "inputs")
+            ).items()
+        }
+        written = monitoring.write_lar_summary(
+            phy_folder, period, run, files, rawid_to_name=names, data_type=data_type
+        )
+        utils.logger.info("...LAr summary keys written: %s", written)
+
+        # per-SiPM SPE spectra: validates the PE calibration in force (~5 min)
+        hit_dir = os.path.join(
+            auto_dir_path, "generated/tier/hit", data_type, period, run
+        )
+        hit_files = sorted(glob.glob(os.path.join(hit_dir, "*.lh5")))
+        written = monitoring.write_spe_spectrum(
+            phy_folder,
+            period,
+            run,
+            hit_files,
+            files,
+            rawid_to_name=names,
+            data_type=data_type,
+        )
+        utils.logger.info("...SPE spectrum keys written: %s", written)
 
     def task_strip_transport(logger=None):
         """Drop the v1 classifier pivots of the period's finished runs.
@@ -269,9 +317,10 @@ def auto_run(
         for done_run in sorted(os.listdir(period_dir)):
             if done_run >= run or not re.fullmatch(r"r\d+", done_run):
                 continue
-            repack.strip_classifier_pivots(
-                files_folder, period, done_run, data_type=data_type
-            )
+            for subsystem in contract_schema.SUBSYSTEMS:
+                repack.strip_transport_pivots(
+                    files_folder, period, done_run, data_type, subsystem=subsystem
+                )
 
     def task_render_plots(logger=None):
         """Draw the run's figures from the contract file.
@@ -359,13 +408,17 @@ def auto_run(
         det_info = utils.build_detector_info(
             os.path.join(auto_dir_path, "inputs"), start_key=start_key
         )
+        monitoring.check_spms_thresholds(mtg_folder, period, run, data_type=data_type)
+        spms_info = utils.build_spms_info(
+            os.path.join(auto_dir_path, "inputs"), start_key=start_key
+        )
         utils.check_cal_phy_thresholds(
             mtg_folder,
             period,
             run,
             data_type,
             det_info["detectors"],
-            detector_info=det_info["detectors"],
+            detector_info=det_info["detectors"] | spms_info,
             data_type=data_type,
         )
 
@@ -385,6 +438,7 @@ def auto_run(
             tasks.Task("phy_summary_plots", task_phy_summary_plots, period, run)
         )
         task_list.append(tasks.Task("qc_plots", task_qc_plots, period, run))
+        task_list.append(tasks.Task("lar_summary", task_lar_summary, period, run))
         task_list.append(tasks.Task("phy_issues", task_phy_issues, period, run))
         task_list.append(
             tasks.Task("strip_transport", task_strip_transport, period, run)
@@ -422,6 +476,14 @@ HEADLINE_PNG_KEYS = [
     ("IsPulser", "BlStd", "ADC"),
 ]
 
+# same for the spms contract, grouped by barrel and position instead of string
+SPMS_HEADLINE_PNG_KEYS = [
+    ("IsBsln", "WfMode_var", "%"),
+    ("IsBsln", "CurrFwhm", "ADC"),
+    ("IsBsln", "NPulses", "per window"),
+    ("All", "HasAnyNoise", "fraction"),
+]
+
 
 def render_run_plots(
     files_folder: str,
@@ -451,27 +513,53 @@ def render_run_plots(
     logger = logger if logger is not None else utils.logger
     run_dir = os.path.join(files_folder, "generated/plt/hit", data_type, period, run)
     v2_file = os.path.join(run_dir, f"l200-{period}-{run}-{data_type}-geds-schema2.hdf")
-    if not os.path.isfile(v2_file):
+    spms_file = v2_file.replace("-geds-schema2.hdf", "-spms-schema2.hdf")
+    if not os.path.isfile(v2_file) and not os.path.isfile(spms_file):
         utils.logger.warning("no contract-v2 file to render PNGs from: %s", v2_file)
         return []
-    detector_map = pd.read_hdf(v2_file, "detector_map")
     saved = []
-    for flag, param, unit in HEADLINE_PNG_KEYS:
-        try:
-            binned = contract_reader.read_binned_series(v2_file, flag, param, "10min")
-        except KeyError:
-            utils.logger.debug("...no %s_%s in %s, skip PNG", flag, param, v2_file)
-            continue
-        for string, group in detector_map.groupby("string"):
-            saved += contract_plots.plot_binned_series(
-                binned,
-                run_dir,
-                f"{flag}_{param}_st{int(string):02d}",
-                title=f"{flag} {param} — string {string} ({period} {run}, 10min bins)",
-                unit=unit,
-                detectors=list(group["name"]),
-                logger=logger,
-            )
+    detector_map = None
+    if os.path.isfile(v2_file):
+        detector_map = pd.read_hdf(v2_file, "detector_map")
+        for flag, param, unit in HEADLINE_PNG_KEYS:
+            try:
+                binned = contract_reader.read_binned_series(
+                    v2_file, flag, param, "10min"
+                )
+            except KeyError:
+                utils.logger.debug("...no %s_%s in %s, skip PNG", flag, param, v2_file)
+                continue
+            for string, group in detector_map.groupby("string"):
+                saved += contract_plots.plot_binned_series(
+                    binned,
+                    run_dir,
+                    f"{flag}_{param}_st{int(string):02d}",
+                    title=f"{flag} {param} — string {string} ({period} {run}, 10min bins)",
+                    unit=unit,
+                    detectors=list(group["name"]),
+                    logger=logger,
+                )
+
+    if os.path.isfile(spms_file):
+        spms_map = pd.read_hdf(spms_file, "detector_map")
+        for flag, param, unit in SPMS_HEADLINE_PNG_KEYS:
+            try:
+                binned = contract_reader.read_binned_series(
+                    spms_file, flag, param, "10min"
+                )
+            except KeyError:
+                continue
+            for (barrel, position), group in spms_map.groupby(["barrel", "position"]):
+                saved += contract_plots.plot_binned_series(
+                    binned,
+                    run_dir,
+                    f"{flag}_{param}_{barrel}_{position}",
+                    title=f"{flag} {param} — {barrel} {position} ({period} {run}, 10min bins)",
+                    unit=unit,
+                    detectors=list(group["name"]),
+                    logger=logger,
+                    envelope=param != "HasAnyNoise",
+                )
 
     # the full monitoring figure set, from the period contract file(s)
     output_folder = os.path.join(files_folder, "generated/plt/hit", data_type)

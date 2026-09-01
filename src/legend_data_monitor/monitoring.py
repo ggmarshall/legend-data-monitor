@@ -207,13 +207,13 @@ def qc_distributions(
 
     classifier_rows = []
     with pd.HDFStore(my_file, "r") as store:
-        df_energy_IsPhysics = store["/IsPhysics_TrapemaxCtcCal"]
-        df_energy_IsPhysics = filter_series_by_ignore_keys(
-            df_energy_IsPhysics, utils.IGNORE_KEYS, period
-        )
+        # the mask must come from the *unfiltered* frame: load_and_filter loads
+        # its target unfiltered too, and pandas' where() needs both shapes to
+        # match. Every frame below is passed through the ignore-keys filter
+        # right after masking, so nothing survives that should have been dropped
+        mask = store["/IsPhysics_TrapemaxCtcCal"] > 25
 
         for par in pars_to_inspect:
-            mask = df_energy_IsPhysics > 25
             frames = {
                 "All": utils.load_and_filter(store, f"/All_{par}"),
                 "IsPulser": utils.load_and_filter(store, f"/IsPulser_{par}"),
@@ -1518,3 +1518,716 @@ def collect_stability_series(
         yaml.dump(output, f)
 
     return results
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# SiPM production by-products: per-cycle noise and the PE calibration in force
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+def read_spms_noise(prod_path: str, period: str, run: str, data_type: str = "phy"):
+    """
+    Collect ``baseline_curr_fwhm`` per SiPM from the per-cycle ``par_dsp_spms`` files.
+
+    Parameters
+    ----------
+    prod_path : str
+        Production version root (the folder containing ``generated/``).
+    period, run : str
+        Run to read.
+    data_type : str
+        Data type of the par files.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Cycle timestamp (``datetime`` index) x SiPM name, float32; empty when
+        the run has no par files.
+    """
+    folder = os.path.join(prod_path, "generated/par/dsp", data_type, period, run)
+    rows = {}
+    for path in sorted(glob.glob(os.path.join(folder, "*-par_dsp_spms.yaml"))):
+        key = os.path.basename(path).split("-")[4]
+        with open(path) as f:
+            pars = yaml.load(f, Loader=yaml.CLoader) or {}
+        rows[pd.Timestamp(key, tz="UTC")] = {
+            name: entry.get("baseline_curr_fwhm")
+            for name, entry in pars.items()
+            if isinstance(entry, dict)
+        }
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame.from_dict(rows, orient="index").astype("float32")
+    frame.index.name = "datetime"
+    return frame.sort_index()
+
+
+def _spms_overrides_in_force(overrides: str, validity: str, start_key: str) -> list:
+    """
+    Load the SiPM override files in force at ``start_key``, in merge order.
+
+    Replays ``validity.yaml`` the way the parameter database does
+    (reset/remove/append). Entries that point outside the overrides directory
+    -- the hit validity list references ``../raw/...`` files -- or that do not
+    parse to a mapping are skipped: they carry no SiPM calibration, and
+    following them is what made the database lookup raise on p16/p18.
+
+    Parameters
+    ----------
+    overrides : str
+        ``inputs/dataprod/overrides/hit`` directory.
+    validity : str
+        The ``validity.yaml`` inside it.
+    start_key : str
+        Timestamp key the run starts at.
+
+    Returns
+    -------
+    list
+        ``(relative path, parsed mapping)`` pairs, in the order they apply.
+    """
+    with open(validity) as f:
+        entries = yaml.load(f, Loader=yaml.CLoader) or []
+    in_force: list = []
+    for entry in sorted(entries, key=lambda e: str(e.get("valid_from", ""))):
+        if str(entry.get("valid_from", "")) > start_key:
+            break
+        paths = [p for p in entry.get("apply", []) if p.startswith("lar/")]
+        mode = entry.get("mode")
+        if mode == "reset":
+            in_force = list(paths)
+        elif mode == "remove":
+            in_force = [p for p in in_force if p not in entry.get("apply", [])]
+        else:
+            in_force += paths
+
+    loaded = []
+    for path in in_force:
+        full = os.path.join(overrides, path)
+        if not os.path.exists(full):
+            # the file names carry a T% wildcard for the validity timestamp:
+            # glob the entry's own basename pattern (newest match wins), so an
+            # unrelated yaml sharing the directory is never picked up
+            pattern = os.path.basename(path).replace("T%", "*")
+            candidates = sorted(
+                glob.glob(os.path.join(overrides, os.path.dirname(path), pattern))
+            )
+            if not candidates:
+                continue
+            full = candidates[-1]
+        with open(full) as f:
+            pars = yaml.load(f, Loader=yaml.CLoader)
+        if isinstance(pars, dict):
+            loaded.append((path, pars))
+    return loaded
+
+
+def _deep_update(base: dict, extra: dict) -> dict:
+    """Merge ``extra`` into ``base`` recursively; later values win."""
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_update(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def read_spms_calibration(prod_path: str, start_key: str) -> pd.DataFrame:
+    """
+    Resolve the SiPM PE calibration (``energy_in_pe``/``is_valid_hit`` overrides) in force at ``start_key``.
+
+    Parameters
+    ----------
+    prod_path : str
+        Production version root (the folder containing ``inputs/``).
+    start_key : str
+        Timestamp key (``20260731T181831Z``) the run starts at.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per SiPM: ``pe_a``, ``pe_m``, ``threshold_a`` and the
+        ``source`` override file **that last defined that SiPM** (its
+        period/run tell how stale its calibration is -- they differ per SiPM,
+        so the newest file in force says nothing about most of them); empty
+        when no override resolves.
+    """
+    overrides = os.path.join(prod_path, "inputs/dataprod/overrides/hit")
+    validity = os.path.join(overrides, "validity.yaml")
+    if not os.path.exists(validity):
+        return pd.DataFrame()
+    # an override touches only the channels it lists, so a run's SiPMs are
+    # calibrated by a spread of files: merge them in order (deeply -- a later
+    # file may supply only part of one channel's pars) and remember which file
+    # last defined each channel
+    merged: dict = {}
+    owner: dict = {}
+    for path, pars in _spms_overrides_in_force(overrides, validity, start_key):
+        for name, entry in pars.items():
+            if not str(name).startswith("S") or not isinstance(entry, dict):
+                continue
+            owner[name] = path
+            _deep_update(merged.setdefault(name, {}), entry)
+
+    rows = {}
+    for name, entry in merged.items():
+        ops = entry.get("pars", {}).get("operations", {})
+        rows[name] = {
+            "pe_a": ops.get("energy_in_pe", {}).get("parameters", {}).get("a"),
+            "pe_m": ops.get("energy_in_pe", {}).get("parameters", {}).get("m"),
+            "threshold_a": ops.get("is_valid_hit", {}).get("parameters", {}).get("a"),
+            "source": owner.get(name),
+        }
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame.from_dict(rows, orient="index").sort_index()
+    frame.index.name = "name"
+    return frame
+
+
+def write_spms_production_keys(
+    output_folder: str,
+    period: str,
+    run: str,
+    prod_path: str,
+    start_key: str | None = None,
+    data_type: str = "phy",
+) -> list:
+    """
+    Publish ``spms_noise/<run>`` and ``spms_calibration/<run>`` to the period contract.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring output root (the folder containing ``<period>/``).
+    period, run : str
+        Run to publish.
+    prod_path : str
+        Production version root (``generated/`` and ``inputs/`` live there).
+    start_key : str, optional
+        Run start key for the calibration lookup; skipped when None.
+    data_type : str
+        Data type key of the period contract file.
+
+    Returns
+    -------
+    list
+        Keys written.
+    """
+    path = period_contract_path(output_folder, period, data_type)
+    written = []
+    noise = read_spms_noise(prod_path, period, run, data_type)
+    if not noise.empty:
+        written.append(contract_writer.write_frame(path, f"spms_noise/{run}", noise))
+    if start_key is not None:
+        try:
+            calib = read_spms_calibration(prod_path, start_key)
+        except Exception as exc:  # noqa: BLE001 - auxiliary key, never fatal
+            # the geds output of this task is already complete; a malformed
+            # override tree must not fail the run (it did, with rc=1, on p16/p18)
+            utils.logger.warning(
+                "could not resolve the SiPM calibration for %s-%s: %s", period, run, exc
+            )
+            calib = pd.DataFrame()
+        if not calib.empty:
+            written.append(
+                contract_writer.write_frame(path, f"spms_calibration/{run}", calib)
+            )
+    return written
+
+
+#: (contract key, qcp metric) pairs checked by check_spms_thresholds
+SPMS_THRESHOLD_KEYS = [
+    key
+    for key, info in utils.MTG_PLOT_INFO.items()
+    if isinstance(info, dict)
+    and str(info.get("title", "")).startswith("spms_")
+    and not str(key).startswith("lar_")
+]
+
+
+#: period-file keys (``group`` or ``group/column``) graded by check_spms_thresholds
+LAR_THRESHOLD_KEYS = [
+    key
+    for key, info in utils.MTG_PLOT_INFO.items()
+    if isinstance(info, dict) and str(key).startswith("lar_")
+]
+
+
+def check_spms_thresholds(
+    output_folder: str, period: str, run: str, data_type: str = "phy"
+) -> dict:
+    """
+    Grade every SiPM (and the LAr veto) against the bands and record the verdicts in ``qcp_summary.yaml``.
+
+    Reads the 60min bins of the run's spms contract file for each key listed
+    in ``mtg-plot-settings.yaml`` with an ``spms_*`` title, and the
+    ``lar_*`` period keys (optionally averaged over ``rolling`` bins first);
+    verdicts land
+    under ``<sipm>/phy/<metric>`` next to the geds ones, and the magnitudes
+    behind a failing verdict are stashed for the issue records exactly as
+    :func:`utils.check_threshold` does for geds.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring output root (the folder containing ``<period>/``).
+    period, run : str
+        Run to grade.
+    data_type : str
+        Data type of the contract file.
+
+    Returns
+    -------
+    dict
+        ``{sipm: {metric: verdict}}`` for the SiPMs graded (plus ``LAr`` for
+        the run-level veto fractions); empty when nothing could be read.
+    """
+    run_dir = os.path.join(output_folder, period, run)
+    contract = os.path.join(
+        run_dir, f"l200-{period}-{run}-{data_type}-spms-schema2.hdf"
+    )
+    qcp_path = os.path.join(run_dir, f"l200-{period}-{run}-qcp_summary.yaml")
+    output = utils.load_yaml_or_default(qcp_path, {})
+    graded = {}
+    if not os.path.isfile(contract):
+        utils.logger.debug("no spms contract at %s; no SiPM thresholds", contract)
+    for key in SPMS_THRESHOLD_KEYS if os.path.isfile(contract) else []:
+        info = utils.MTG_PLOT_INFO[key]
+        flag, _, param = key.partition("_")
+        try:
+            frame = contract_reader.read_binned_series(
+                contract, flag, param, "60min"
+            ).to_frame("mean")
+        except KeyError:
+            utils.logger.debug("...no %s in %s, skip", key, contract)
+            continue
+        t0 = [frame.index[0]]
+        if info.get("rolling"):
+            frame = frame.rolling(int(info["rolling"]), min_periods=1).mean()
+        for sipm in frame.columns:
+            series = frame[sipm].dropna()
+            if series.empty:
+                continue
+            output.setdefault(sipm, {}).setdefault("phy", {})
+            utils.check_threshold(
+                series,
+                sipm,
+                None,
+                t0,
+                list(info["limits"]),
+                info["title"],
+                output,
+                period=period,
+                run=run,
+            )
+            graded.setdefault(sipm, {})[info["title"]] = output[sipm]["phy"][
+                info["title"]
+            ]
+    # LAr veto keys live in the period file: per-SiPM occupancy and, under
+    # the pseudo-detector "LAr", the run-level veto/accidental fractions
+    period_file = period_contract_path(output_folder, period, data_type)
+    for key in LAR_THRESHOLD_KEYS:
+        info = utils.MTG_PLOT_INFO[key]
+        group, _, column = key.partition("/")
+        try:
+            frame = contract_reader.read_frame(period_file, f"{group}/{run}")
+        except (KeyError, OSError):
+            continue
+        if column:
+            frame = frame[[column]].rename(columns={column: "LAr"})
+        if info.get("rolling"):
+            frame = frame.rolling(int(info["rolling"]), min_periods=1).mean()
+        for name in frame.columns:
+            series = frame[name].dropna()
+            if series.empty:
+                continue
+            output.setdefault(name, {}).setdefault("phy", {})
+            utils.check_threshold(
+                series,
+                name,
+                None,
+                [frame.index[0]],
+                list(info["limits"]),
+                info["title"],
+                output,
+                period=period,
+                run=run,
+            )
+            graded.setdefault(name, {})[info["title"]] = output[name]["phy"][
+                info["title"]
+            ]
+    if graded:
+        with open(qcp_path, "w") as f:
+            yaml.dump(output, f)
+    return graded
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# LAr veto performance from the evt tier
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+_LAR_EVT_FIELDS = [
+    "trigger/timestamp",
+    "trigger/is_forced",
+    "coincident/spms",
+    "coincident/puls",
+    "coincident/muon",
+    "geds/multiplicity",
+    "spms/energy_sum",
+    "spms/multiplicity",
+    "spms/first_t0",
+    "spms/geds_coincidence_classifier",
+    "spms/is_trig_coin_pulse",
+    "spms/rawid",
+]
+
+
+def read_lar_events(files: list) -> tuple:
+    """
+    Reduce the evt tier of a run to per-event LAr scalars and per-SiPM participation.
+
+    Parameters
+    ----------
+    files : list
+        evt-tier LH5 files of one run.
+
+    Returns
+    -------
+    tuple
+        ``(events, occupancy)``: a frame of per-event scalars (``datetime``
+        index; ``is_forced``, ``is_phys`` (geds trigger, no pulser/muon),
+        ``vetoed``, ``energy_sum``, ``multiplicity``, ``first_t0``,
+        ``classifier``) and a boolean frame (same index x SiPM rawid) of
+        whether each SiPM had a pulse coincident with the trigger. Both empty
+        when nothing could be read.
+    """
+    from lgdo import lh5
+
+    frames, parts = [], []
+    for path in files:
+        try:
+            evt = lh5.read_as("evt/", path, library="ak", field_mask=_LAR_EVT_FIELDS)
+        except (KeyError, ValueError, OSError) as exc:
+            utils.logger.debug("skipping evt file %s: %s", os.path.basename(path), exc)
+            continue
+        if len(evt) == 0:
+            continue
+        index = pd.to_datetime(ak.to_numpy(evt.trigger.timestamp), unit="s", utc=True)
+        forced = ak.to_numpy(evt.trigger.is_forced)
+        frames.append(
+            pd.DataFrame(
+                {
+                    "is_forced": forced,
+                    "is_phys": ~forced
+                    & ~ak.to_numpy(evt.coincident.puls)
+                    & ~ak.to_numpy(evt.coincident.muon)
+                    & (ak.to_numpy(evt.geds.multiplicity) > 0),
+                    "vetoed": ak.to_numpy(evt.coincident.spms),
+                    "energy_sum": ak.to_numpy(evt.spms.energy_sum).astype("float32"),
+                    "multiplicity": ak.to_numpy(evt.spms.multiplicity).astype("int16"),
+                    "first_t0": ak.to_numpy(evt.spms.first_t0).astype("float32"),
+                    "classifier": ak.to_numpy(
+                        evt.spms.geds_coincidence_classifier
+                    ).astype("float32"),
+                },
+                index=pd.DatetimeIndex(index, name="datetime"),
+            )
+        )
+        # the per-event rawid list is dense (every SiPM, every event), so a
+        # plain 2-D array is the channel axis
+        rawids = ak.to_numpy(evt.spms.rawid[0])
+        has_pulse = ak.to_numpy(
+            ak.fill_none(ak.any(evt.spms.is_trig_coin_pulse, axis=2), False)
+        )
+        parts.append(
+            pd.DataFrame(has_pulse, index=frames[-1].index, columns=rawids.tolist())
+        )
+    if not frames:
+        return pd.DataFrame(), pd.DataFrame()
+    return pd.concat(frames).sort_index(), pd.concat(parts).sort_index()
+
+
+def lar_veto_series(events: pd.DataFrame, freq: str = "1h") -> pd.DataFrame:
+    """
+    Hourly LAr veto performance from the per-event scalars of :func:`read_lar_events`.
+
+    Columns: ``n_phys``, ``veto_frac`` (physics geds events flagged by the
+    LAr veto), ``accidental_frac`` (forced triggers flagged: the veto's random
+    coincidence probability, i.e. its dead time), ``energy_sum_median``,
+    ``multiplicity_median`` and ``first_t0_frac`` over vetoed physics events,
+    ``classifier_median`` over physics events.
+    """
+    if events.empty:
+        return pd.DataFrame()
+    phys = events[events["is_phys"]]
+    vetoed = phys[phys["vetoed"]]
+    forced = events[events["is_forced"]]
+    grouped = phys.resample(freq)
+    out = pd.DataFrame(
+        {
+            "n_phys": grouped.size(),
+            "veto_frac": grouped["vetoed"].mean(),
+            "accidental_frac": forced.resample(freq)["vetoed"].mean(),
+            "energy_sum_median": vetoed.resample(freq)["energy_sum"].median(),
+            "multiplicity_median": vetoed.resample(freq)["multiplicity"].median(),
+            "first_t0_frac": vetoed.resample(freq)["first_t0"].apply(
+                lambda s: float(np.isfinite(s).mean()) if len(s) else np.nan
+            ),
+            "classifier_median": grouped["classifier"].median(),
+        }
+    )
+    out.index.name = "datetime"
+    return out.astype("float32")
+
+
+def write_lar_summary(
+    output_folder: str,
+    period: str,
+    run: str,
+    files: list,
+    rawid_to_name: dict | None = None,
+    data_type: str = "phy",
+) -> list:
+    """
+    Publish the run's LAr veto performance to the period contract and the spms contract.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring output root (the folder containing ``<period>/``).
+    period, run : str
+        Run to summarise.
+    files : list
+        evt-tier LH5 files of the run.
+    rawid_to_name : dict, optional
+        SiPM rawid -> name for the occupancy columns (rawids kept otherwise).
+    data_type : str
+        Data type key of the contract files.
+
+    Returns
+    -------
+    list
+        Keys written: ``lar_veto/<run>`` and ``lar_occupancy/<run>`` in the
+        period file, ``hist/IsPhysics_Lar{EnergySum,Multiplicity,Classifier}_dist``
+        in the run's spms contract (when it exists).
+    """
+    from .processing import binning
+
+    events, participation = read_lar_events(files)
+    if events.empty:
+        utils.logger.warning("no evt data for %s/%s; no LAr summary", period, run)
+        return []
+    written = []
+    path = period_contract_path(output_folder, period, data_type)
+    written.append(
+        contract_writer.write_frame(path, f"lar_veto/{run}", lar_veto_series(events))
+    )
+    phys = participation[events["is_phys"].to_numpy()]
+    occupancy = phys.resample("1h").mean().astype("float32")
+    occupancy.columns = [
+        (rawid_to_name or {}).get(c, str(c)) for c in occupancy.columns
+    ]
+    occupancy.index.name = "datetime"
+    written.append(contract_writer.write_frame(path, f"lar_occupancy/{run}", occupancy))
+
+    spms_contract = os.path.join(
+        output_folder, period, run, f"l200-{period}-{run}-{data_type}-spms-schema2.hdf"
+    )
+    if os.path.isfile(spms_contract):
+        vetoed = events[events["is_phys"] & events["vetoed"]]
+        for column, param, unit in [
+            ("energy_sum", "LarEnergySum", "p.e."),
+            ("multiplicity", "LarMultiplicity", "SiPMs"),
+            ("classifier", "LarClassifier", "a.u."),
+        ]:
+            values = vetoed[column].to_numpy(dtype=float)
+            if not len(values):
+                continue
+            written.append(
+                contract_writer.write_distribution(
+                    spms_contract,
+                    "IsPhysics",
+                    param,
+                    binning.fill_distribution(values),
+                    {"unit": unit, "label": param, "event_type": "IsPhysics"},
+                )
+            )
+        _refresh_run_manifest(output_folder, period, run, data_type)
+    return written
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# SiPM single-photoelectron spectra (PE calibration validation)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#: per-pulse energy_in_pe histogram: 0-5 p.e. at 0.02 p.e./bin, fine enough to
+#: locate the 1 p.e. centroid (a valid calibration puts it at exactly 1.0)
+SPE_BINS = 250
+SPE_RANGE = (0.0, 5.0)
+
+
+def _refresh_run_manifest(
+    output_folder: str, period: str, run: str, data_type: str
+) -> None:
+    """Re-inventory the run manifest after adding keys to a contract file."""
+    from .contract import build as contract_build
+
+    generated_path = output_folder.split("/generated/")[0]
+    try:
+        contract_build.refresh_manifest(
+            generated_path, period, run, data_type=data_type
+        )
+    except (OSError, KeyError) as exc:  # never lose the keys over the inventory
+        utils.logger.warning("could not refresh the manifest for %s: %s", run, exc)
+
+
+def read_spe_spectra(
+    hit_files: list, evt_files: list, rawid_to_name: dict | None = None
+) -> dict:
+    """
+    Histogram every SiPM pulse energy, split by trigger type.
+
+    ``energy_in_pe = pe_a + pe_m * energy``, so a correct calibration puts the
+    1/2/3 p.e. peaks at exactly 1.0/2.0/3.0 and the 1 p.e. centroid offset is
+    the gain drift in p.e. units. Pulses are taken **unmasked** (without
+    ``is_valid_hit``): the threshold sits below 1 p.e., so masking clips the
+    low side of the very peak being measured. Forced triggers (the random
+    sample) give the cleanest single-photoelectron spectrum; physics events
+    are kept separately.
+
+    Parameters
+    ----------
+    hit_files : list
+        hit-tier LH5 files of the run.
+    evt_files : list
+        evt-tier files of the same run, for the forced-trigger flag; the
+        tiers are row-aligned per file.
+    rawid_to_name : dict, optional
+        SiPM rawid -> name for the category axis (rawids kept otherwise).
+
+    Returns
+    -------
+    dict
+        flag (``IsBsln``/``IsPhysics``) -> boost_histogram.Histogram
+        (Regular(energy) x StrCategory(SiPM)).
+    """
+    import awkward as ak
+    from lgdo import lh5
+
+    from .processing import binning
+
+    evt_by_key = {os.path.basename(f).split("-")[4]: f for f in evt_files}
+    hists = {
+        flag: binning.empty_distribution_2d(SPE_BINS, SPE_RANGE)
+        for flag in ("IsBsln", "IsPhysics")
+    }
+    channels = None
+    for path in hit_files:
+        key = os.path.basename(path).split("-")[4]
+        evt_path = evt_by_key.get(key)
+        if evt_path is None:
+            utils.logger.debug("no evt file for %s; skipping SPE fill", key)
+            continue
+        if channels is None:
+            names = set(rawid_to_name or {})
+            channels = [
+                c
+                for c in lh5.ls(path)
+                if c.startswith("ch")
+                and (not names or int(c[2:]) in (rawid_to_name or {}))
+            ]
+        forced = ak.to_numpy(
+            lh5.read_as(
+                "evt/", evt_path, library="ak", field_mask=["trigger/is_forced"]
+            ).trigger.is_forced
+        )
+        for channel in channels:
+            try:
+                pulses = lh5.read_as(
+                    f"{channel}/hit/",
+                    [path],
+                    library="ak",
+                    field_mask=["energy_in_pe"],
+                ).energy_in_pe
+            except (KeyError, ValueError, TypeError):
+                continue
+            if len(pulses) != len(forced):
+                utils.logger.warning(
+                    "%s: %d hit rows vs %d evt rows in %s; skipping SPE fill",
+                    channel,
+                    len(pulses),
+                    len(forced),
+                    key,
+                )
+                continue
+            name = (rawid_to_name or {}).get(int(channel[2:]), channel)
+            counts = ak.to_numpy(ak.num(pulses))
+            values = ak.to_numpy(ak.flatten(pulses))
+            per_pulse = np.repeat(forced, counts)
+            finite = np.isfinite(values)
+            for flag, mask in (("IsBsln", per_pulse), ("IsPhysics", ~per_pulse)):
+                selected = values[finite & mask]
+                if len(selected):
+                    hists[flag].fill(selected, name)
+    return hists
+
+
+def write_spe_spectrum(
+    output_folder: str,
+    period: str,
+    run: str,
+    hit_files: list,
+    evt_files: list,
+    rawid_to_name: dict | None = None,
+    data_type: str = "phy",
+) -> list:
+    """
+    Publish the per-SiPM single-photoelectron spectra to the run's spms contract.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring output root (the folder containing ``<period>/``).
+    period, run : str
+        Run to summarise.
+    hit_files, evt_files : list
+        hit- and evt-tier LH5 files of the run.
+    rawid_to_name : dict, optional
+        SiPM rawid -> name for the category axis.
+    data_type : str
+        Data type key of the contract file.
+
+    Returns
+    -------
+    list
+        Keys written (``hist/<flag>_EnergyInPe_dist2d``); empty when the run
+        has no spms contract file or no pulses.
+    """
+    contract = os.path.join(
+        output_folder, period, run, f"l200-{period}-{run}-{data_type}-spms-schema2.hdf"
+    )
+    if not os.path.isfile(contract):
+        utils.logger.warning("no spms contract at %s; no SPE spectra", contract)
+        return []
+    written = []
+    for flag, hist in read_spe_spectra(hit_files, evt_files, rawid_to_name).items():
+        if not hist.sum():
+            continue
+        written.append(
+            contract_writer.write_distribution_2d(
+                contract,
+                flag,
+                "EnergyInPe",
+                hist,
+                {
+                    "unit": "p.e.",
+                    "label": "Pulse energy",
+                    "event_type": flag,
+                    "selection": "all pulses (is_valid_hit not applied)",
+                },
+            )
+        )
+    if written:
+        _refresh_run_manifest(output_folder, period, run, data_type)
+    return written

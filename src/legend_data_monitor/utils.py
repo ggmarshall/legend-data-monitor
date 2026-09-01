@@ -55,6 +55,7 @@ from .config.settings import (  # noqa: E402,F401
     SC_PARAMETERS,
     SPECIAL_PARAMETERS,
     SPECIAL_SYSTEMS,
+    SPMS_REDUCTIONS,
 )
 
 pkg = importlib.resources.files("legend_data_monitor")
@@ -534,6 +535,19 @@ def check_plot_settings(conf: dict) -> bool:
                 continue
 
             # other non-exposure checks
+
+            # plot structures are subsystem-specific
+            structure = plot_settings["plot_structure"]
+            spms_only = structure in ("per barrel", "per fiber")
+            geds_only = structure in ("per cc4", "array")
+            if (subsys == "spms") != spms_only and (spms_only or geds_only):
+                logger.error(
+                    "\033[91mPlot structure '%s' is not available for %s (plot '%s')\033[0m",
+                    structure,
+                    subsys,
+                    plot,
+                )
+                return False
 
             # if vs time was provided, need time window
             if (
@@ -1269,7 +1283,21 @@ ISSUE_METRIC_HIST_KEYS = {
     "escale_FEP_pos": "hist/IsPhysics_TrapemaxCtcCal",
     "escale_fwhm_FEP": "hist/IsPhysics_TrapemaxCtcCal",
     "escale_fwhm_583": "hist/IsPhysics_TrapemaxCtcCal",
+    "spms_baseln_stab": "hist/IsBsln_WfMode_var",
+    "spms_noise_stab": "hist/IsBsln_CurrFwhm_var",
+    "spms_dark_rate": "hist/IsBsln_NPulses",
+    "spms_noisy_frac": "hist/All_HasAnyNoise",
 }
+
+#: qcp metrics evaluated on the spms contract (their data_ref points there)
+SPMS_METRICS = {m for m in ISSUE_METRIC_HIST_KEYS if m.startswith("spms_")}
+
+
+#: subsystem each metric belongs to, naming the array-level pseudo-detector a
+#: correlated failure collapses onto (see issues.collapse_correlated)
+def _metric_subsystem(metric: str) -> str:
+    return "spms" if metric.startswith("spms_") else "geds"
+
 
 # metrics whose numbers live in the period contract file; {run}/{det} filled in
 ISSUE_METRIC_PERIOD_KEYS = {
@@ -1279,6 +1307,9 @@ ISSUE_METRIC_PERIOD_KEYS = {
     "discharge_rate": ("phy", "qc_rate_series/IsDischarge/{run}"),
     "saturated_rate": ("phy", "qc_rate_series/IsSaturated/{run}"),
     "tot_discharge_dead_time": ("phy", "dead_time/{run}"),
+    "lar_veto_frac": ("phy", "lar_veto/{run}"),
+    "lar_accidental_frac": ("phy", "lar_veto/{run}"),
+    "spms_occupancy": ("phy", "lar_occupancy/{run}"),
 }
 
 
@@ -1308,14 +1339,17 @@ def _first_seen_runs(output_folder: str, period: str, run: str, key: str) -> dic
     return first
 
 
-def _issue_plots(run_dir: str, string: int | None) -> list:
-    """Diagnostic PNGs to attach to an issue: this detector's string, if rendered."""
-    if string is None:
-        return []
+def _issue_plots(run_dir: str, meta: dict) -> list:
+    """Diagnostic PNGs to attach to an issue: the detector's string (geds) or barrel side (spms), if rendered."""
     figs = os.path.join(run_dir, "figs")
     if not os.path.isdir(figs):
         return []
-    suffix = f"_st{int(string):02d}.png"
+    if meta.get("string") is not None:
+        suffix = f"_st{int(meta['string']):02d}.png"
+    elif meta.get("barrel") is not None:
+        suffix = f"_{meta['barrel']}_{meta['position']}.png"
+    else:
+        return []
     return [
         os.path.join(figs, name)
         for name in sorted(os.listdir(figs))
@@ -1379,8 +1413,13 @@ def check_cal_phy_thresholds(
                 # binned contract data (falling back to the summary itself)
                 hist_key = ISSUE_METRIC_HIST_KEYS.get(metric)
                 period_ref = ISSUE_METRIC_PERIOD_KEYS.get(metric)
-                if hist_key and os.path.isfile(contract_file):
-                    data_ref = {"file": contract_file, "key": hist_key}
+                ref_file = (
+                    contract_file.replace("-geds-schema2", "-spms-schema2")
+                    if metric in SPMS_METRICS
+                    else contract_file
+                )
+                if hist_key and os.path.isfile(ref_file):
+                    data_ref = {"file": ref_file, "key": hist_key}
                 elif period_ref:
                     period_file = os.path.join(
                         output_folder,
@@ -1402,6 +1441,7 @@ def check_cal_phy_thresholds(
                             detail.get("observed"),
                             detail.get("threshold"),
                             detail.get("excursion"),
+                            reference=detail.get("reference"),
                         ),
                         period=period,
                         run=run,
@@ -1409,14 +1449,15 @@ def check_cal_phy_thresholds(
                         observed=detail.get("observed"),
                         threshold=detail.get("threshold"),
                         unit=detail.get("unit"),
+                        reference=detail.get("reference"),
                         window=detail.get("window"),
                         excursion=detail.get("excursion"),
                         first_seen_run=first_seen.get((ged, metric), run),
                         rawid=meta.get("daq_rawid"),
                         string=meta.get("string"),
-                        position=meta.get("position"),
+                        position=meta.get("position") if "string" in meta else None,
                         data_ref=data_ref,
-                        plots=_issue_plots(run_dir, meta.get("string")),
+                        plots=_issue_plots(run_dir, meta),
                         suggested_action=(
                             "if persistent and not spurious: review usability of "
                             f"{ged} in legend-datasets statuses "
@@ -1424,6 +1465,20 @@ def check_cal_phy_thresholds(
                         ),
                     )
                 )
+
+    # an array-wide event trips one metric on most of the array at once; emit it
+    # as a single record instead of one per channel (evaluated counts come from
+    # the summary, so the fraction is against what was actually checked)
+    evaluated: dict = {}
+    for det_data in output.values():
+        for metric, verdict in det_data.get(key, {}).items():
+            if verdict is not None:
+                evaluated[metric] = evaluated.get(metric, 0) + 1
+    found = issues.collapse_correlated(
+        found,
+        evaluated,
+        {issue.metric: _metric_subsystem(issue.metric) for issue in found},
+    )
 
     if found:
         # the issues tree sits beside generated/plt under the output root
@@ -2078,14 +2133,54 @@ def get_vals(df, ch):
 
 
 def load_and_filter(store, key: str, mask=None):
-    """Load a given key from a HDF file and applies a mask."""
+    """
+    Load a given key from a HDF file and apply a mask.
+
+    The mask and its target come from the same v1 file and describe the same
+    events, so they line up by construction. When they do not -- a mask whose
+    index carries labels the target lacks makes the alignment ambiguous and
+    pandas raises ``putmask: mask and data must be the same size`` -- the cut
+    is applied by position if the shapes still match, and otherwise the key is
+    dropped with a warning: one malformed frame must not take down the whole
+    summary task (it did, on the p18 backfill).
+
+    Parameters
+    ----------
+    store : pandas.HDFStore
+        Open v1 monitoring file.
+    key : str
+        Key to load.
+    mask : pandas.DataFrame, optional
+        Boolean frame selecting the entries to keep.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The masked frame, empty when the key is absent or the mask cannot be
+        applied.
+    """
     if key not in store.keys():
         logger.debug(f"...key {key} not available. Skip it!")
         return pd.DataFrame()
     df = store[key]
-    if mask is not None:
-        df = df.where(mask)
-    return df
+    if mask is None:
+        return df
+    if df.index.equals(mask.index) and df.columns.equals(mask.columns):
+        return df.where(mask)
+    if df.shape == mask.shape:
+        logger.warning(
+            "...mask for %s does not share its target's index; applying by position",
+            key,
+        )
+        return df.where(mask.to_numpy())
+    logger.warning(
+        "...mask for %s does not fit the frame (%s vs %s); dropping the key rather "
+        "than reporting uncut values",
+        key,
+        mask.shape,
+        df.shape,
+    )
+    return pd.DataFrame()
 
 
 def load_yaml_or_default(path: str, detectors: dict) -> dict:
@@ -2263,6 +2358,46 @@ def _build_detector_info_cached(metadata_path, start_key=None):
     return {"detectors": detectors, "str_chns": dict(str_chns)}
 
 
+def build_spms_info(metadata_path, start_key=None):
+    """
+    Build SiPM channel information from LEGEND metadata, keyed by channel name.
+
+    Parameters
+    ----------
+    metadata_path : str
+        LEGEND metadata root (``<prod>/inputs``).
+    start_key : str, optional
+        Timestamp key selecting the channel map; latest when omitted.
+
+    Returns
+    -------
+    dict
+        name -> {daq_rawid, barrel, fiber, position, processable, usability}.
+    """
+    return copy.deepcopy(_build_spms_info_cached(metadata_path, start_key))
+
+
+@lru_cache(maxsize=None)
+def _build_spms_info_cached(metadata_path, start_key=None):
+    lmeta = LegendMetadata(metadata_path)
+    chmap = lmeta.channelmap(start_key) if start_key else lmeta.channelmap()
+    detectors = {}
+    for det, info in chmap.items():
+        if info["system"] != "spms" or info["name"] != det:
+            continue
+        analysis = info.get("analysis", {})
+        detectors[det] = {
+            "name": det,
+            "daq_rawid": info["daq"]["rawid"],
+            "barrel": info["location"]["barrel"],
+            "fiber": info["location"]["fiber"],
+            "position": info["location"]["position"],
+            "processable": analysis.get("processable", False),
+            "usability": analysis.get("usability", None),
+        }
+    return detectors
+
+
 def build_detector_info_per_period(auto_dir_path: str, run_dict: dict, period: str):
     metadata_path = os.path.join(auto_dir_path, "inputs")
     lmeta = LegendMetadata(metadata_path)
@@ -2271,7 +2406,14 @@ def build_detector_info_per_period(auto_dir_path: str, run_dict: dict, period: s
 
     for run in run_dict[period]:
         key = f"{period}-{run}"
-        start_key = get_start_key(auto_dir_path, "phy", period, run)
+        try:
+            start_key = get_start_key(auto_dir_path, "phy", period, run)
+        except (FileNotFoundError, ValueError) as exc:
+            # the run list comes from the cal par directory, which legitimately
+            # holds runs that never took physics data: they have no phy start
+            # key and simply contribute no channel map (downstream skips them)
+            logger.debug("...no start key for %s-%s: %s", period, run, exc)
+            continue
         chmap = lmeta.channelmap(start_key)
 
         for det, info in chmap.items():

@@ -781,9 +781,7 @@ class Subsystem:
 
         setup_info: dict with the keys 'experiment' and 'period'
 
-        Later will probably be changed to get channel map by run, if possible
-        Planning to add:
-            - barrel column for SiPMs special case
+        Later will probably be changed to get channel map by run, if possible.
         """
         utils.logger.info("... getting channel map")
 
@@ -909,6 +907,10 @@ class Subsystem:
                 special_systems[self.type]
                 if self.type in special_systems
                 else entry_info["location"]["position"]
+            )
+            # barrel (IB/OB) only exists for spms
+            df_map.at[ch, "barrel"] = (
+                entry_info["location"]["barrel"] if self.type == "spms" else None
             )
             # CC4 information - will be None for L60 (set to 'null') or spms (there, but no CC4s)
             df_map.at[ch, "cc4_id"] = (

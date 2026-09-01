@@ -29,6 +29,10 @@ with open(pkg / "settings" / "parameter-tiers.yaml") as f:
 with open(pkg / "settings" / "special-parameters.yaml") as f:
     SPECIAL_PARAMETERS = yaml.load(f, Loader=yaml.CLoader)
 
+# per-event reductions of the ragged spms fields, computed at load
+with open(pkg / "settings" / "spms-reductions.yaml") as f:
+    SPMS_REDUCTIONS = yaml.load(f, Loader=yaml.CLoader)
+
 # flag renames for evt type
 with open(pkg / "settings" / "flags.yaml") as f:
     FLAGS_RENAME = yaml.load(f, Loader=yaml.CLoader)
@@ -69,6 +73,8 @@ COLUMNS_TO_LOAD = [
     # cc4_id/cc4_channel are read by the "per cc4" plot structure
     "cc4_id",
     "cc4_channel",
+    # barrel (IB/OB) is only set for spms; None for every other system
+    "barrel",
 ]
 
 # On-disk layout for the pandas (v1) HDF outputs.

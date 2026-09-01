@@ -55,7 +55,9 @@ def load_channel_frame(
     if not files or not channels:
         return pd.DataFrame()
 
-    fields = list(dict.fromkeys(list(params) + ["timestamp"]))
+    from ..processing import spms
+
+    fields, derived = spms.expand_fields(list(params) + ["timestamp"])
     frames = []
     # the dtype each field actually has in the tier, before any concatenation
     # gets a chance to widen it (see utils.narrow_to_native_dtypes)
@@ -80,6 +82,9 @@ def load_channel_frame(
                 )
                 continue
             if frame is not None and len(frame):
+                # reduce before concatenating: pandas concatenates ragged
+                # (awkward-backed) columns in Python, ~100x slower than scalars
+                frame = spms.reduce_frame(frame, derived, list(params))
                 native.update(frame.dtypes.items())
                 per_file.append(frame)
         if not per_file:

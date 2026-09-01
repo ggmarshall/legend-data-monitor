@@ -1,4 +1,3 @@
-import io
 from typing import Union
 
 import matplotlib.patches as mpatches
@@ -861,6 +860,7 @@ def plot_per_fiber_and_barrel(data_analysis: DataFrame, plot_info: dict, pdf: Pd
 def plot_per_barrel_and_position(
     data_analysis: DataFrame, plot_info: dict, pdf: PdfPages
 ):
+    """One figure per barrel x position (IB/OB x top/bottom), one panel per fiber."""
     if plot_info["subsystem"] != "spms":
         utils.logger.error(
             "\033[91mPlotting per barrel-position is available ONLY for spms.\nTry again!\033[0m"
@@ -868,133 +868,48 @@ def plot_per_barrel_and_position(
         raise errors.MonitoringError(
             "plot_per_barrel_and_position failed (see log for details)"
         )
-    # here will be a function plotting SiPMs with:
-    # - one figure for each barrel-position combination (IB-top, IB-bottom, OB-top, OB-bottom) = 4 figures in total
-
     plot_style = plot_styles.PLOT_STYLE[plot_info["plot_style"]]
     utils.logger.debug("Plot style: " + plot_info["plot_style"])
 
-    par_dict = {}
-
-    # re-arrange dataframe to separate location: from location=[IB-015-016] to location=[IB] & fiber=[015-016]
-    data_analysis["fiber"] = (
-        data_analysis["location"].str.split("-").str[1].str.join("")
-        + "-"
-        + data_analysis["location"].str.split("-").str[2].str.join("")
-    )
-    data_analysis["location"] = (
-        data_analysis["location"].str.split("-").str[0].str.join("")
-    )
-
-    # -------------------------------------------------------------------------------
-    # create label of format hardcoded for geds pX-chXXX-name
-    # -------------------------------------------------------------------------------
-
-    labels = data_analysis.groupby("channel").first()[
-        ["name", "position", "location", "fiber"]
-    ]
-    labels["channel"] = labels.index
-    labels["label"] = labels[
-        ["position", "location", "fiber", "channel", "name"]
-    ].apply(
-        lambda x: f"{x['position']}-{x['location']}-{x['fiber']}-ch{str(x['channel']).zfill(3)}-{x['name']}",
-        axis=1,
-    )
-    # put it in the table
+    labels = data_analysis.groupby("channel").first()[["name", "location"]]
     data_analysis = data_analysis.set_index("channel")
-    data_analysis["label"] = labels["label"]
-    data_analysis = data_analysis.sort_values("label")
+    data_analysis["label"] = (
+        labels["name"].astype(str) + "-ch" + labels.index.astype(str)
+    )
+    data_analysis = data_analysis.reset_index()
+    colors = COLORS or color_palette("hls", 2).as_hex()
 
-    data_analysis = data_analysis.sort_values(["location", "label"])
-
-    # separate figure for each barrel ("location"= IB, OB)...
-    for location, data_location in data_analysis.groupby("location"):
-        # ...and position ("position"= bottom, top)
-        for position, data_position in data_location.groupby("position"):
-
-            # -------------------------------------------------------------------------------
-            # create plot structure: M columns, N rows with subplots for each channel
-            # -------------------------------------------------------------------------------
-
-            # number of channels in this barrel
-            if location == "IB":
-                num_rows = 3
-                num_cols = 3
-            if location == "OB":
-                num_rows = 4
-                num_cols = 5
-            # create corresponding number of subplots for each channel, set constrained layout to accommodate figure suptitle
-            fig, axes = plt.subplots(
-                nrows=num_rows,
-                ncols=num_cols,
-                figsize=(10, num_rows * 3),
-                sharex=True,
-                constrained_layout=True,
-            )  # , sharey=True)
-
-            # -------------------------------------------------------------------------------
-            # plot
-            # -------------------------------------------------------------------------------
-
-            data_position = data_position.reset_index()
-            channel = data_position["channel"].unique()
-            det_idx = 0
-            col_idx = 0
-            labels = []
-            for ax_row in axes:
-                for (
-                    axes
-                ) in ax_row:  # this is already the Axes object (no need to add ax_idx)
-                    # plot one channel on each axis, ordered by position
-                    data_position = data_position[
-                        data_position["channel"] == channel[col_idx]
-                    ]  # get only rows for a given channel
-
-                    # plotting...
-                    if data_position.empty:
-                        det_idx += 1
-                        continue
-
-                    plot_style(
-                        data_position, fig, axes, plot_info, color=COLORS[det_idx]
-                    )
-                    labels.append(data_position["label"])
-
-                    if channel[det_idx] not in par_dict.keys():
-                        par_dict[channel[det_idx]] = {}
-
-                    # set label as title for each axes
-                    text = (
-                        data_position["label"][0][4:]
-                        if position == "top"
-                        else data_position["label"][0][7:]
-                    )
-                    axes.set_title(label=text, loc="center")
-
-                    # add grid
-                    axes.grid("major", linestyle="--")
-                    axes.set_axisbelow(True)
-                    # remove automatic y label since there will be a shared one
-                    axes.set_ylabel("")
-
-                    det_idx += 1
-                    col_idx += 1
-
-            fig.suptitle(
-                f"{plot_info['subsystem']} - {plot_info['title']}\n{position} {location}",
-                y=1.15,
-            )
-            # fig.supylabel(f'{plotdata.param.label} [{plotdata.param.unit_label}]') # --> plot style
-            plt.savefig(pdf, format="pdf", bbox_inches="tight")
-            # figures are retained until explicitly closed; close to not consume too much memory
-            plt.close()
-
-            with io.BytesIO() as buf:
-                fig.savefig(buf, bbox_inches="tight")
-                buf.seek(0)
-                par_dict[f"figure_plot_{location}_{position}"] = buf.getvalue()
-
-    return par_dict
+    for (barrel, position), data_bp in data_analysis.groupby(
+        ["barrel", "position"], observed=True
+    ):
+        fibers = sorted(data_bp["location"].astype(str).unique())
+        fig, axes = plt.subplots(
+            len(fibers),
+            figsize=(10, len(fibers) * 3),
+            sharex=True,
+            sharey=True,
+            constrained_layout=True,
+            squeeze=False,
+        )
+        for ax, fiber in zip(axes[:, 0], fibers):
+            data_fiber = data_bp[data_bp["location"].astype(str) == fiber]
+            legend = []
+            for idx, (label, data_channel) in enumerate(data_fiber.groupby("label")):
+                plot_style(data_channel, fig, ax, plot_info, colors[idx % len(colors)])
+                legend.append(label)
+            ax.grid("major", linestyle="--")
+            ax.set_axisbelow(True)
+            ax.set_title(f"fiber {fiber}")
+            ax.set_ylabel("")
+            ax.legend(labels=legend, loc="center left", bbox_to_anchor=(1, 0.5))
+            if "limits" in plot_info:
+                plot_limits(ax, plot_info["parameters"], plot_info["limits"])
+        fig.suptitle(
+            f"{plot_info['subsystem']} - {plot_info['title']}\n{barrel} {position}",
+            y=1.05,
+        )
+        plt.savefig(pdf, format="pdf", bbox_inches="tight")
+        plt.close()
 
 
 # -------------------------------------------------------------------------------

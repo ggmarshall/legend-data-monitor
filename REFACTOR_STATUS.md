@@ -277,6 +277,144 @@ fixed ranges clipping the min/max envelope, the dead `IsBsln_<param>` menu
 branch, `_uncamel` not inverting the producer's camel-caser) were handed to
 the dashboard session with file:line references.
 
+## SiPM / LAr monitoring, phase S1 (2026-08-21)
+
+Nothing LAr-related worked end to end before (no spms entries in
+`parameter-tiers.yaml`, so `Subsystem("spms").get_data` raised; the per-barrel
+plot was an unrunnable draft; nothing was ever produced in production). First
+pass, channel health only:
+
+- **Loader reductions** (`processing/spms.py`, `settings/spms-reductions.yaml`):
+  the ragged hit fields become per-event scalars (`n_pulses`, `pe_sum`,
+  `pe_max`, `first_trigger_ns`) inside `load_channel_frame`, per file *before*
+  the concat (pandas concatenates awkward-backed columns in Python: 22 s vs
+  0.3 s for 2 channels x 3 files). Nothing ragged leaves the loader.
+- **Subsystem**: `barrel` column (spms only) in the channel map; `is_spms()`
+  keys on it instead of duck-typing dtypes; `channel_mean` runs for spms
+  (so `_var` keys exist); the pulser01ana aux merge is geds-only.
+- **Config**: `settings/spms-dict.yaml` (wf_mode/curr_fwhm/wf_lower_hwhm/
+  n_pulses in FCbsln = forced triggers, pe_sum/pe_max in phy, has_any_noise in
+  all; 10 min, `per barrel`). `auto_run` merges it with `geds-dict.yaml`.
+  `check_plot_settings` refuses cross-subsystem structures.
+- **Contract flavour**: `build_contract_files(..., subsystem=)` +
+  `build_all_contract_files`; `-spms-schema2.hdf` with a
+  `name/rawid/barrel/fiber/position/processable/usability` detector map,
+  `limits[subsystem]` attrs, manifest merged across subsystem files.
+  `refresh_contract` loops over the subsystem files present; the classifier
+  strip stays geds-only.
+- **Period keys**: `spms_noise/<run>` (hourly `baseline_curr_fwhm` x SiPM from
+  `par_dsp_spms.yaml`) and `spms_calibration/<run>` (the `energy_in_pe` a/m and
+  `is_valid_hit` threshold overrides in force, with their source file — on
+  p22 it is `lar/p19/r005/...`, i.e. the PE calibration is three periods stale).
+- Verified on a 3-key p22/r012 chunk: 58 SiPMs, all 7 families populated,
+  FCbsln `n_pulses` ~0.2 per 100 us window (~2 kHz dark rate), one SiPM at a
+  6 % noisy-waveform fraction against <1 % for the rest; 335 s, 0.75 GB peak.
+
+- **Full run** (p22/r012, spms only, 163 keys in one unchunked pass): 89 min,
+  12.3 GB peak (chunked `auto_run` will be far lower), v1 file 414 MB of which
+  376 MB are the per-event `IsPhysics_PeSum/PeMax` pivots (+ their unused
+  `_var`) — strip them like the classifiers once the dashboard reads spms.
+- **Thresholds** (`mtg-plot-settings.yaml` `spms_*` entries, bands from that
+  run) via `monitoring.check_spms_thresholds` in `phy_issues`: hourly
+  `wf_mode` variation ±0.05 %, `curr_fwhm` variation ±5 %, dark rate 0.002–1
+  pulses/window on a 6 h rolling mean (single empty hours are Poisson),
+  noisy-waveform fraction < 5 %. On r012: S070 fails `spms_noisy_frac`
+  (6.5 % all run, `alert`); everything else passes. Headline PNGs per
+  barrel×position; issue records carry the spms `data_ref` and those plots.
+
+- **v1 strip** generalised (`repack.strip_transport_pivots(subsystem=)`):
+  spms drops every `IsPhysics_*`/`All_*` per-event pivot (keeps `_mean`),
+  geds keeps the classifier rule; `strip_transport` and `repack
+  --strip-classifiers` cover both files.
+
+## Phase S2 — LAr veto performance (2026-08-21)
+
+New task `lar_summary` (after `qc_plots`, ~20 s/run): `monitoring.
+read_lar_events` reduces the evt tier per file (per-event scalars + a dense
+event x SiPM "had a trigger-coincident pulse" matrix from
+`spms/is_trig_coin_pulse`), `write_lar_summary` publishes `lar_veto/<run>`
+(hourly `n_phys`, `veto_frac` of physics geds events, `accidental_frac` of
+forced triggers = the veto's random-coincidence dead time, medians of
+`energy_sum`/`multiplicity`, `first_t0_frac`, `classifier_median`) and
+`lar_occupancy/<run>` (hourly x SiPM participation) to the period file, plus
+`hist/IsPhysics_Lar{EnergySum,Multiplicity,Classifier}_dist` in the spms
+contract. p22/r012: veto 0.73–0.85, accidentals 0.02–0.11, occupancy
+0.12–0.22 per SiPM. Checks (`mtg-plot-settings.yaml` `lar_*` entries, 6 h
+rolling): `lar_veto_frac` 0.6–0.95 and `lar_accidental_frac` < 0.2 under the
+pseudo-detector `LAr`, `spms_occupancy` > 0.02 per SiPM; graded by
+`check_spms_thresholds`, issue `data_ref` into the period file.
+
+Still to do: p22 spms backfill is running (sequential, ~75 min/run, then the
+strip); the dashboard SiPM/LAr pages need a rewrite against the spms contract
+and the `lar_*` keys (dashboard session). The LLAMA page has no producer
+anywhere (out of scope).
+
+## Issue-stream semantics + p22 re-grade (2026-08-22)
+
+Two changes to how verdicts become issues (`bc1e40a`), then the whole p22 issue
+stream re-derived so the tree matches the code.
+
+- **Array-wide collapse** (`issues.collapse_correlated`): one metric failing on
+  >=30 % of the detectors it was evaluated on (and >=5 of them) is one
+  common-mode event, not N detector problems. Those records become a single
+  record on a `spms-array`/`geds-array` pseudo-detector carrying the worst
+  member's magnitudes plus `affected_detectors` / `affected_frac`. The 30 %
+  floor is calibrated on p22: per-detector cal metrics fail on 10-25 % of the
+  array in a normal run (never collapse), the SiPM noise events on 33-100 %.
+- **Resolution graded one-sided**: `escale_fwhm_FEP`/`escale_fwhm_583` fail only
+  above the band -- an improved FWHM is not an issue. `classify_severity` grew a
+  `reference` argument (the band centre the escale evaluator already recorded)
+  so a one-sided band still has a half-width and a degraded detector can still
+  reach `alert`.
+
+**p22 re-grade** (14 runs, ~24 min each, verdicts re-derived from the
+contract/period files -- no raw reloading; the stale stream predated the
+excursion wiring and the SiPM checks). Against the pre-regrade backup
+(`/data1/users/marshall/lmon-v2-p22-prerregrade-backup`):
+
+- records 420 -> 383, but **magnitudes 93/420 -> 339/383** and **alerts 12 ->
+  72**: severity finally discriminates instead of everything being `warning`.
+- fwhm records 157 -> 71: **86 of them were detectors whose resolution had
+  improved**. Every other cal metric identical (AoE_stab 37, FEP_gain_stab 16,
+  const_stab 16, npeak 24...), and geds phy identical (pulser_stab 46,
+  baseln_stab 45, baseln_spike 10) -- the re-grade is faithful; only the
+  intended thing moved.
+- 44 SiPM/LAr records appear (they were graded but never emitted), and
+  `tot_discharge_dead_time` -- a *run-level* quantity that duplicates itself
+  across all 59 detectors -- now emits once per run instead of 59 times.
+- 12 array records stand in for 631 per-detector ones; the phy stream would be
+  773 records uncollapsed, it is 154.
+- The pass also wrote the period families that were missing since the backfill:
+  `cal_points` res/res_quad, `param_stability/*_std`, `gain_shift/*_std`,
+  `pul_cusp/kevdiff`, `event_rate_qc` -- all 14 runs.
+
+Known follow-ups: scalar one-sided metrics (`tot_discharge_dead_time`, the
+rates) have no `reference`, so they can never grade `alert` however far past
+the band -- recording `reference=0` for fractions whose floor is zero would fix
+it (and wants a re-grade to stay consistent). SiPM headline PNGs exist only for
+r012, so array records attach no plots elsewhere.
+
+## SiPM SPE spectra + manifest inventory (2026-08-23)
+
+- `hist/<flag>_EnergyInPe_dist2d` in every spms contract (`88effcd`): all 58
+  SiPMs' pulse energies, 250 bins over 0-5 p.e., forced triggers (`IsBsln`) and
+  physics (`IsPhysics`) separately. A separate pass (`monitoring.write_spe_spectrum`,
+  shaped like `write_lar_summary`) reads hit `energy_in_pe` + evt
+  `trigger/is_forced`, which are row-aligned per file -- 4 min/run against the
+  89-min build, so the whole p22 backfill took an hour. Pulses are unmasked on
+  purpose (the validity threshold sits below 1 p.e.), which means a peak search
+  must start above the channel's own `threshold_a`.
+- **Finding**: 1 p.e. centroids span 0.89-1.25 on r012 (11/58 off by >5 %, 5/58
+  by >10 %) -- real, previously unmonitored gain drift. The PE calibration in
+  force is a spread of eight override files from p15 to p19, **35 of 58 SiPMs
+  from p15/r004**; `read_spms_calibration` used to stamp them all with the
+  newest file, now fixed to resolve provenance per SiPM.
+- **Manifest inventory** (`a8dc122`): writers that add keys after the contract
+  build left them out of `manifest["files"][...]["keys"]`, so manifest-trusting
+  consumers were blind to the SPE keys *and* to the phase-S2 LAr `_dist` keys.
+  `contract.build.refresh_manifest()` re-inventories from the files, and both
+  post-build writers call it. All 14 p22 manifests rebuilt: 69 spms keys each.
+
 ## Remaining
 
 1. ~~**Pickled-figure shelve writers**~~ **DONE (2026-08-20)**, see above. Was:
