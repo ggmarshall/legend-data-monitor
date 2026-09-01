@@ -137,10 +137,18 @@ def test_muon_summary_keys_and_spectrum(tmp_path):
 
 
 def test_muon_summary_without_pmts_rows(tmp_path):
+    """A valid dsp file that simply holds no PMT tables yields no summary."""
     evt = _write_evt(tmp_path / "evt.lh5")
+    dsp = tmp_path / "dsp.lh5"
+    lh5.write(
+        Table({"timestamp": Array(np.arange(3.0))}),
+        "dsp",
+        str(dsp),
+        group="ch1104000",  # a geds table, no PMT groups
+    )
     assert (
         monitoring.write_muon_summary(
-            str(tmp_path), PERIOD, RUN, [str(tmp_path / "none.lh5")], [evt], {1: "X"}
+            str(tmp_path), PERIOD, RUN, [str(dsp)], [evt], {2001604: "PMT101"}
         )
         == []
     )

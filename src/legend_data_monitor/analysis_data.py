@@ -594,12 +594,10 @@ class AnalysisData:
         return self.data["barrel"].notna().any()
 
     def is_pmts(self) -> bool:
-        """Return True for muon-veto PMT data (string locations, no barrel)."""
+        """Return True for muon-veto PMT data (its locations are the tank groups)."""
         if self.data.empty or self.is_spms():
             return False
-        return isinstance(str(self.data.iloc[0]["location"]), str) and str(
-            self.data.iloc[0]["location"]
-        ) in ("pillbox", "floor", "wall")
+        return str(self.data.iloc[0]["location"]) in ("pillbox", "floor", "wall")
 
     def is_geds(self) -> bool:
         """Return True if the data is neither SiPM nor PMT flavoured."""

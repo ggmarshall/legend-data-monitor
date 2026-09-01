@@ -2250,8 +2250,9 @@ def read_pmt_events(dsp_files: list, rawid_to_name: dict) -> tuple:
     Collect the muon-DAQ triggers and fill the per-PMT pulse-height spectra.
 
     One dsp row per PMT per muon-DAQ trigger (~5/min): small enough to read
-    whole. Pulse heights are taken unmasked (no ``containsPulse`` cut) so the
-    single-photoelectron region of the spectrum is not clipped.
+    whole. The spectrum takes every pulse height unmasked (no ``containsPulse``
+    cut) so the single-photoelectron region is not clipped; the per-trigger
+    ``light_sum`` counts only PMTs that actually saw a pulse.
 
     Parameters
     ----------
@@ -2294,6 +2295,7 @@ def read_pmt_events(dsp_files: list, rawid_to_name: dict) -> tuple:
             continue
         frame = pd.concat(frames, ignore_index=True)
         heights = frame["pulseHeight"].to_numpy()
+        has_pulse = frame["containsPulse"].astype(bool).to_numpy()
         finite = np.isfinite(heights)
         if finite.any():
             spectrum.fill(heights[finite], name)
@@ -2301,8 +2303,9 @@ def read_pmt_events(dsp_files: list, rawid_to_name: dict) -> tuple:
             pd.DataFrame(
                 {
                     "timestamp": frame["timestamp"],
-                    "has_pulse": frame["containsPulse"].astype(bool),
-                    "height": np.where(finite, heights, 0.0),
+                    "has_pulse": has_pulse,
+                    # only PMTs that saw a pulse contribute to the summed light
+                    "height": np.where(finite & has_pulse, heights, 0.0),
                 }
             )
         )
