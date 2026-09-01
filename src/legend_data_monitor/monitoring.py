@@ -1605,13 +1605,16 @@ def _spms_overrides_in_force(overrides: str, validity: str, start_key: str) -> l
     for path in in_force:
         full = os.path.join(overrides, path)
         if not os.path.exists(full):
-            # the file names carry a T% wildcard for the validity timestamp
+            # the file names carry a T% wildcard for the validity timestamp:
+            # glob the entry's own basename pattern (newest match wins), so an
+            # unrelated yaml sharing the directory is never picked up
+            pattern = os.path.basename(path).replace("T%", "*")
             candidates = sorted(
-                glob.glob(os.path.join(overrides, os.path.dirname(path), "*.yaml"))
+                glob.glob(os.path.join(overrides, os.path.dirname(path), pattern))
             )
             if not candidates:
                 continue
-            full = candidates[0]
+            full = candidates[-1]
         with open(full) as f:
             pars = yaml.load(f, Loader=yaml.CLoader)
         if isinstance(pars, dict):

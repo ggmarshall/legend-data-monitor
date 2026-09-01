@@ -183,3 +183,19 @@ def test_production_keys_survive_a_broken_override_tree(tmp_path, monkeypatch):
         str(out), "p22", "r012", prod, start_key="20260731T181831Z"
     )
     assert keys == ["spms_noise/r012"]  # the noise key still lands
+
+
+def test_wildcard_entry_resolves_its_own_basename(tmp_path):
+    """A T% validity entry must never pick up an unrelated yaml in the directory."""
+    prod = _mock_prod(tmp_path)
+    d = tmp_path / "inputs/dataprod/overrides/hit/lar/p19/r005"
+    # an unrelated file that sorts first, and an older timestamped variant
+    (d / "aaa-unrelated.yaml").write_text(yaml.safe_dump({"S002": {"pars": {}}}))
+    real = d / "l200-p19-r005-phy-lar-T%-par_hit-overwrite.yaml"
+    older = d / "l200-p19-r005-phy-lar-20260101T000000Z-par_hit-overwrite.yaml"
+    newer = d / "l200-p19-r005-phy-lar-20260201T000000Z-par_hit-overwrite.yaml"
+    older.write_text(real.read_text().replace("0.7", "0.1"))
+    newer.write_text(real.read_text())
+    real.unlink()  # force the wildcard fallback
+    calib = monitoring.read_spms_calibration(prod, "20260731T181831Z")
+    assert calib.loc["S002", "pe_m"] == 0.7  # the newest matching variant
