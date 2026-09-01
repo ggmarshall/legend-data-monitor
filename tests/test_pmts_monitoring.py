@@ -1,8 +1,5 @@
 """Muon-veto (pmts) flavour: contract build, muon summary, plot config."""
 
-import glob
-import os
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -16,8 +13,18 @@ from legend_data_monitor.processing import binning
 
 PERIOD, RUN = "p22", "r012"
 PMTS = {
-    "PMT101": {"daq_rawid": 2001604, "location": "pillbox", "processable": True, "usability": "on"},
-    "PMT201": {"daq_rawid": 2001605, "location": "floor", "processable": True, "usability": "on"},
+    "PMT101": {
+        "daq_rawid": 2001604,
+        "location": "pillbox",
+        "processable": True,
+        "usability": "on",
+    },
+    "PMT201": {
+        "daq_rawid": 2001605,
+        "location": "floor",
+        "processable": True,
+        "usability": "on",
+    },
 }
 
 
@@ -91,9 +98,9 @@ def test_pmts_contract_flavour(tmp_path, monkeypatch):
     keys = manifest["files"][name]["keys"]
     assert {"hist/All_BlMean/1min", "detector_map"} <= set(keys)
     det_map = pd.read_hdf(str(run_dir / name), "detector_map")
-    assert list(det_map.columns) == ["name", "rawid"] + writer.DETECTOR_MAP_COLUMNS[
-        "pmts"
-    ]
+    assert (
+        list(det_map.columns) == ["name", "rawid"] + writer.DETECTOR_MAP_COLUMNS["pmts"]
+    )
     assert list(det_map["location"]) == ["pillbox", "floor"]
     binned = reader.read_binned_series(str(run_dir / name), "All", "BlMean", "1min")
     assert binned.detectors == ["PMT101", "PMT201"]

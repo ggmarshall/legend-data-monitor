@@ -445,6 +445,13 @@ Muon page gets rebuilt on contract keys the way the SiPM page was.
   no `containsPulse` cut) land in the pmts contract. New `muon_summary` task.
 - On p22/r012: 0.08 Hz, multiplicity median 4, light sum ~80 LSB,
   ge-coincidence 0.6-0.7 % (offline flag all zero).
+- **p22 backfill DONE 2026-09-01 03:09 UTC**, validated 14/14: pmts contracts
+  ~62 MB each (manifest now lists three files per run), `muon_veto/<run>` x14.
+  Rate 0.088-0.092 Hz on quiet runs; r000/r004/r011 elevated (0.11-0.13 Hz,
+  r004 coincides with the SiPM noise burst); ge-coincidence stable 0.60-0.62 %.
+  Producer response for the dashboard left at
+  `/data1/users/marshall/phy-dash/pmts-contract-landed.md`. v1 pmts files are
+  ~90 MB/run (a 1-min pivot of a sparse stream) -- strip/compact candidate.
 - Also fixed on the way: a PMT absent from a file raises `LH5DecodeError`
   under current lh5 — now caught in the direct loader too (the old
   `KeyError/ValueError` catch predates it).
