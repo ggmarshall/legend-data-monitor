@@ -29,7 +29,7 @@ def _read_frame(path, key, log, warn=True):
     """Read one contract key; None (with a log line) when it is missing."""
     try:
         return contract_reader.read_frame(path, key)
-    except (KeyError, FileNotFoundError, OSError) as exc:
+    except (KeyError, OSError) as exc:  # FileNotFoundError is an OSError
         (log.warning if warn else log.debug)(
             "missing contract key %s in %s (%s)", key, path, exc
         )
