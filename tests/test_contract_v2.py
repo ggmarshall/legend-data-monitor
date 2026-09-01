@@ -193,7 +193,6 @@ import sys
 for mod in list(sys.modules):
     assert not mod.startswith("legend_data_monitor"), mod
 import h5py
-import h5py
 import numpy as np
 with h5py.File({path!r}, "r") as f:
     assert int(f.attrs["lmon_schema_version"]) == 2
@@ -248,3 +247,23 @@ def test_contract_file_carries_no_slack(tmp_path):
         assert f["hist/IsPulser_Trapemax/1min/storage/values"].dtype == np.float32
     # an orphaned float64 copy of the storage measures 1.37x here
     assert os.path.getsize(path) < 1.15 * sum(stored)
+
+
+def test_apply_remove_keys_honours_period_and_run_scope(monkeypatch):
+    from legend_data_monitor.config import settings
+
+    idx = pd.date_range("2026-07-01", periods=4, freq="1h", tz="UTC")
+    df = pd.DataFrame({"V01234A": [1.0, 2.0, 3.0, 4.0]}, index=idx)
+    entry = {"from": "2026-07-01 01:00Z", "to": "2026-07-01 02:00Z"}
+    monkeypatch.setattr(
+        settings, "REMOVE_KEYS", {"V01234A": [entry | {"period": "p22", "run": "r001"}]}
+    )
+    # the scoped entry applies to its own run only
+    hit = writer.apply_remove_keys(df, "p22", "r001")
+    assert hit["V01234A"].isna().sum() == 2
+    for period, run in [("p22", "r002"), ("p21", "r001")]:
+        miss = writer.apply_remove_keys(df, period, run)
+        assert miss["V01234A"].notna().all()
+    # an unscoped entry still applies everywhere
+    monkeypatch.setattr(settings, "REMOVE_KEYS", {"V01234A": [entry]})
+    assert writer.apply_remove_keys(df, "p21", "r009")["V01234A"].isna().sum() == 2
