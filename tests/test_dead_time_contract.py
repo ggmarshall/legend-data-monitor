@@ -376,27 +376,3 @@ def test_write_cal_points_roundtrip(tmp_path):
     back = reader.read_frame(path, "cal_points/r012")
     assert back["fep_diff"].iloc[0] == pytest.approx(0.5)
     assert monitoring.write_cal_points(str(tmp_path), "p22", "r012", []) is None
-
-
-def test_open_shelf_writes_a_real_shelve_by_default(tmp_path):
-    path = str(tmp_path / "store")
-    with monitoring.open_shelf(path) as shelf:
-        shelf["k"] = b"payload"
-    with monitoring.open_shelf(path) as shelf:
-        assert shelf["k"] == b"payload"
-
-
-def test_open_shelf_drops_writes_when_disabled(tmp_path):
-    """--write-shelves off must produce no pickled output at all."""
-    import glob
-
-    path = str(tmp_path / "store")
-    monitoring.set_write_shelves(False)
-    try:
-        with monitoring.open_shelf(path) as shelf:
-            shelf["k"] = b"payload"
-            # reads behave like an empty store, which callers already handle
-            assert shelf.get("k") is None
-    finally:
-        monitoring.set_write_shelves(True)
-    assert glob.glob(path + "*") == []

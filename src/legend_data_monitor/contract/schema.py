@@ -45,6 +45,11 @@ def dist_key(flag: str, param: str) -> str:
     return f"hist/{flag}_{param}_dist"
 
 
+def dist2d_key(flag: str, param: str) -> str:
+    """HDF group path of a per-detector distribution histogram."""
+    return f"hist/{flag}_{param}_dist2d"
+
+
 def mean_key(flag: str, param: str) -> str:
     """Pandas key of the per-detector run-mean frame."""
     return f"{flag}_{param}_mean"

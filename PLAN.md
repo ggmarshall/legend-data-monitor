@@ -46,6 +46,26 @@ Two known-unverified areas that real data will exercise for the first time: the 
 
 ## Phase R3 — dashboard on LNGS against real data
 
+**STATUS: Phase R3 serving, pending browser sign-off** (2026-08-20): dashboard
+checkout `/data1/users/marshall/phy-dash/legend-monitor-dashboard` on
+`feat/contract-v2-phy` + main merged (clean; picks up the CSV-race fix). Full
+suite 61 passed / 0 skipped after two fixes committed as b27ca85: (1) contract
+reader caches now key on (path, mtime_ns, **size**) — coarse fs timestamp
+granularity could serve stale manifests; (2) roundtrip test tolerances moved
+to float32, matching the producer's narrowed storage. Headless smoke of the
+real-config phy view (p22/r012, full flag x value x style x units x cadence
+sweep): v2 **96 OK / 0 FAIL** against `lmon-v2-p22`; every EMPTY combo is a
+key production never produced either (no `IsBsln_<param>`, no `EventRate` in
+production's 200-key v1 file — widget-vocabulary excess, pre-existing). v1
+fallback smoke against the live production tree: 48 OK / 0 FAIL, Histogram
+correctly reports "requires v2". Serving on legend-login2: port 9000 = v2
+(`dashboard-config-lngs.yaml`, base/cal `auto/v2.0.0`, phy `lmon-v2-p22`),
+port 9001 = v1 production tree for side-by-side. Remaining: browser
+verification via `ssh -L 9000:localhost:9000 legend-login2` (and 9001), then
+push the branch. Notes: no slow-control HDF in the v2 tree (overlay absent by
+design); llama/muon/spm pages disabled (llama page crashes at build — bug
+noted for upstream; muon/spm have no data).
+
 1. On lngs-login:
    ```sh
    git clone -b feat/contract-v2-phy https://github.com/legend-exp/legend-monitor-dashboard
@@ -59,22 +79,25 @@ Two known-unverified areas that real data will exercise for the first time: the 
 
 **STATUS: performance + Phase-5c pass verified** (2026-08-18): p22/r012 rerun clean against the golden snapshot — exit 0, **3 h 11 m (was 5 h 00 m)**, peak RSS **17.3 GB (was 24 GB)**, 196/200 v1 keys byte-identical and all contract keys/manifest identical. The 4 differing keys are a **pre-existing data-corruption bug now fixed**: the DataLoader path wrote uninitialised memory (denormals ~1.5e-319) for 6 detectors that lack `is_valid_bl_poly_rms_classifier`; the direct loader yields NaN. Worth raising with the collaboration — that garbage also reached the old dashboard. See REFACTOR_STATUS.md for detail.
 
-**STATUS: classifier pivots stripped (2026-08-20)**: the 28 QC classifier
-pivots (1.61 GB of the 2.2 GB v1 file) are removed once the contract holds
-their binned versions — guarded, idempotent, wired into
-`task_build_monitoring_hdf` and available for old runs via
-`repack --strip-classifiers`. A run's artifact set is now ~1.2 GB (was 17 GB).
-p22 r000–r012 stripped and verified; r013 pending its backfill finish.
+**STATUS: Phase 5c complete (2026-08-20)**: generators are data-only; every
+figure draws from the contract (`plots/{qc,summary,stability,calib}`, legacy
+shifter PDF names preserved verbatim); shelve/pickle deleted package-wide
+(sole exception: the external dataflow shelve reader); `--write-shelves`
+removed and `--plots off` now truly data-only; `plot_run` regenerates the
+full figure set in seconds. Five latent legacy bugs fixed on the way (see
+REFACTOR_STATUS.md). Unblocks the dashboard cal-trend views.
 
 **STATUS: classifier pivots stripped (2026-08-20)**: the v1 file's 28 QC
-classifier pivots (1.61 GB of 2.2 GB) are removed after the contract build —
-they existed only as its transport; binned copies live in the contract and
-res files. Guarded (`repack.strip_classifier_pivots` refuses unless the
-contract holds every key), wired into `task_build_monitoring_hdf`, applied to
-p22 r000–r012 (r013 after it lands). **v1 2.2 -> ~0.6 GB; a run's artifact set
-is ~1.2 GB against the original 17 GB (14x).** Declined for now: dropping the
-contract's 1min min/max sidecars; per-entry loading (peak stays ~5.4 GB —
-r008–r012 measured 5.2–5.6 GB vs 14–17 before).
+classifier pivots (1.61 GB of 2.2 GB) are removed once the contract holds
+their binned copies (res files keep theirs). Guarded
+(`repack.strip_classifier_pivots` refuses unless every key is in the
+contract), wired as the final `strip_transport` task covering the period's
+*finished* runs (the live run is left alone), old runs via
+`repack --strip-classifiers`. Applied to all of p22 r000–r013. **v1 2.2 ->
+~0.6 GB; a run's artifact set is ~1.2 GB against the original 17 GB (14x).**
+Declined for now: dropping the contract's 1min min/max sidecars; per-entry
+loading (peak stays ~5.4 GB — r008–r012 measured 5.2–5.6 GB vs 14–17
+before).
 
 **STATUS: output size + memory pass (2026-08-19)**: v1 file **15.7 -> ~2.2 GB
 per run**, contract file **1.06 -> ~0.58 GB** and ~3x faster to inflate, peak
