@@ -226,7 +226,7 @@ class AnalysisData:
         self.data = (
             sub_data[params_to_get].copy()
             if mask is True
-            else sub_data.loc[mask, params_to_get]
+            else sub_data.loc[mask, params_to_get].copy()
         )
 
         # convert cuts to boolean + apply cuts, if any
