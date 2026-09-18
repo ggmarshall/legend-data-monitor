@@ -19,6 +19,7 @@ def plot_binned_series(
     unit: str | None = None,
     detectors: list | None = None,
     logger=None,
+    envelope: bool = True,
 ) -> list:
     """One PNG per detector group: mean ± std band + min/max envelope.
 
@@ -34,6 +35,9 @@ def plot_binned_series(
         Subset of detector names to draw (default: all).
     logger : logging.Logger, optional
         Where SAVED_PLOT lines are announced.
+    envelope : bool
+        Draw the std band and min/max whiskers; off for boolean (rate) keys,
+        where min/max are always 0/1.
     """
     import matplotlib.pyplot as plt
 
@@ -55,6 +59,8 @@ def plot_binned_series(
             continue
         line = ax.plot(mean.index, mean[det], lw=0.8, label=det)[0]
         color = line.get_color()
+        if not envelope:
+            continue
         ax.fill_between(
             mean.index,
             mean[det] - std[det],

@@ -1143,21 +1143,37 @@ _FIXED_THR = utils.EXPERIMENT["energy"]["escale_fixed_threshold_kev"]
 _ERR_MULT = utils.EXPERIMENT["energy"]["escale_error_multiplier"]
 
 ESCALE_METRICS = {
-    # metric -> (parameter, peak energy, fixed threshold, error multiplier);
-    # peaks and band widths come from settings/experiment.yaml
-    "escale_fwhm_FEP": ("fwhms_peaks", _PEAKS["fep"]["energy_kev"], None, _ERR_MULT),
-    "escale_fwhm_583": ("fwhms_peaks", _PEAKS["low"]["energy_kev"], None, _ERR_MULT),
+    # metric -> (parameter, peak energy, fixed threshold, error multiplier,
+    #            one-sided). Peaks and band widths come from
+    #            settings/experiment.yaml; resolution is graded one-sided, since
+    #            a detector whose FWHM improved is not a problem.
+    "escale_fwhm_FEP": (
+        "fwhms_peaks",
+        _PEAKS["fep"]["energy_kev"],
+        None,
+        _ERR_MULT,
+        True,
+    ),
+    "escale_fwhm_583": (
+        "fwhms_peaks",
+        _PEAKS["low"]["energy_kev"],
+        None,
+        _ERR_MULT,
+        True,
+    ),
     "escale_FEP_pos": (
         "mus_keV_first_cal_peaks",
         _PEAKS["fep"]["energy_kev"],
         _FIXED_THR,
         None,
+        False,
     ),
     "escale_SEP_residual": (
         "residuals",
         _PEAKS["sep"]["energy_kev"],
         _FIXED_THR,
         None,
+        False,
     ),
 }
 _ESCALE_ERR_FIELD = {"fwhms_peaks": "fwhms_err_peaks"}
@@ -1176,8 +1192,10 @@ def evaluate_escale_metrics(
     Reproduces the numbers the legacy figure computed while drawing: for each
     metric, the mean over every run where the detector is usable ("on"), a
     band of either a fixed width or a multiple of the mean fit error around
-    it, and whether the current run's value falls inside. The band magnitudes
-    are stashed via ``issues.record_detail`` for the issue records.
+    it, and whether the current run's value falls inside. Resolution metrics
+    use only the upper half of that band (see ESCALE_METRICS): an improved
+    FWHM is not an issue. The band magnitudes are stashed via
+    ``issues.record_detail`` for the issue records.
 
     Parameters
     ----------
@@ -1199,7 +1217,13 @@ def evaluate_escale_metrics(
     target = f"{period}-{current_run}"
     on_mask = np.array([usability.get(k) == "on" for k in all_keys])
     verdicts = {}
-    for metric, (parameter, peak, fixed_thr, err_thr) in ESCALE_METRICS.items():
+    for metric, (
+        parameter,
+        peak,
+        fixed_thr,
+        err_thr,
+        one_sided,
+    ) in ESCALE_METRICS.items():
         entry = det_results.get(parameter, {}).get(peak, {})
         vals = np.array([float(entry.get(k, np.nan)) for k in all_keys])
         err_field = _ESCALE_ERR_FIELD.get(parameter)
@@ -1222,7 +1246,10 @@ def evaluate_escale_metrics(
         else:
             continue
         val = vals[all_keys.index(target)]
-        ok = bool(lower <= val <= upper)  # NaN target counts as out of band
+        if one_sided:
+            lower = None
+        ok = bool(val <= upper if one_sided else lower <= val <= upper)
+        # a NaN target counts as out of band either way
         verdicts[metric] = ok
         if not ok:
             utils.issues.record_detail(
@@ -1232,7 +1259,7 @@ def evaluate_escale_metrics(
                 det_name,
                 metric,
                 observed=float(val),
-                threshold=[float(lower), float(upper)],
+                threshold=[None if lower is None else float(lower), float(upper)],
                 unit="keV",
                 reference=float(mean),
             )

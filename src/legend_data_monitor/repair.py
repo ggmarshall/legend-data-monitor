@@ -19,6 +19,7 @@ import yaml
 
 from . import errors, utils
 from .contract import build as contract_build
+from .contract import schema
 
 PROD_ROOTS = {
     "lngs": "/data2/public/prodenv/prod-blind/",
@@ -210,26 +211,28 @@ def refresh_contract(
     Returns
     -------
     n_keys : int
-        Number of v1 keys refreshed.
+        Number of v1 keys refreshed, summed over the subsystem files present.
     """
     generated_path = os.path.join(output_folder, ref_version)
-    v1_file = os.path.join(
-        generated_path,
-        "generated/plt/hit",
-        data_type,
-        period,
-        run,
-        f"{experiment}-{period}-{run}-{data_type}-geds.hdf",
-    )
-    with pd.HDFStore(v1_file, "r") as store:
-        keys = [k.lstrip("/") for k in store.keys() if not k.endswith("_info")]
-    contract_build.build_contract_files(
-        generated_path,
-        period,
-        run,
-        metadata_path=os.path.join(prod_root, ref_version, "inputs"),
-        data_type=data_type,
-        experiment=experiment,
-        keys=keys,
-    )
-    return len(keys)
+    run_dir = os.path.join(generated_path, "generated/plt/hit", data_type, period, run)
+    n_keys = 0
+    for subsystem in schema.SUBSYSTEMS:
+        v1_file = os.path.join(
+            run_dir, schema.run_file_name(period, run, data_type, subsystem, experiment)
+        )
+        if not os.path.exists(v1_file):
+            continue
+        with pd.HDFStore(v1_file, "r") as store:
+            keys = [k.lstrip("/") for k in store.keys() if not k.endswith("_info")]
+        contract_build.build_contract_files(
+            generated_path,
+            period,
+            run,
+            metadata_path=os.path.join(prod_root, ref_version, "inputs"),
+            data_type=data_type,
+            experiment=experiment,
+            keys=keys,
+            subsystem=subsystem,
+        )
+        n_keys += len(keys)
+    return n_keys

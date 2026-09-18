@@ -199,18 +199,19 @@ def write_frame(file_path: str, key: str, frame: pd.DataFrame) -> str:
     return key
 
 
-def write_detector_map(file_path: str, detectors: dict) -> str:
-    """Write /detector_map from a build_detector_info()-style dict."""
+#: /detector_map columns per subsystem, in order (source field -> column)
+DETECTOR_MAP_COLUMNS = {
+    "geds": ["string", "position", "processable", "usability", "mass_in_kg"],
+    "spms": ["barrel", "fiber", "position", "processable", "usability"],
+}
+
+
+def write_detector_map(file_path: str, detectors: dict, subsystem: str = "geds") -> str:
+    """Write /detector_map from a build_detector_info()/build_spms_info()-style dict."""
+    columns = DETECTOR_MAP_COLUMNS[subsystem]
     rows = [
-        {
-            "name": name,
-            "rawid": info.get("daq_rawid"),
-            "string": info.get("string"),
-            "position": info.get("position"),
-            "processable": info.get("processable"),
-            "usability": info.get("usability"),
-            "mass_in_kg": info.get("mass_in_kg"),
-        }
+        {"name": name, "rawid": info.get("daq_rawid")}
+        | {col: info.get(col) for col in columns}
         for name, info in detectors.items()
     ]
     return write_frame(file_path, "detector_map", pd.DataFrame(rows))

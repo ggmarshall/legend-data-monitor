@@ -60,6 +60,7 @@ def classify_severity(
     threshold: list | None,
     excursion: "Excursion | None",
     *,
+    reference: float | None = None,
     min_frac_out: float = 0.05,
     band_multiple: float = 1.0,
 ) -> str:
@@ -75,7 +76,10 @@ def classify_severity(
     Time series (phy) are graded on the excursion: sustained (at least
     ``min_frac_out`` of the window) and still out of range at the end.
     Single-value checks (cal) have no excursion, so they are graded on how far
-    past the band the value sits, in units of the band half-width.
+    past the band the value sits, in units of the band half-width. A one-sided
+    band (e.g. resolution, where only degradation is a problem) has no width of
+    its own: the ``reference`` the evaluator recorded — the band centre —
+    supplies it, and without one the issue stays ``warning``.
     """
     if excursion is not None:
         if excursion.frac_out < min_frac_out:
@@ -85,12 +89,21 @@ def classify_severity(
     if observed is None or not threshold:
         return "warning"
     low, high = (list(threshold) + [None, None])[:2]
-    if low is None or high is None or not np.isfinite([low, high]).all():
-        return "warning"
-    half_width = (high - low) / 2.0
+    if low is None or high is None:
+        bound = high if low is None else low
+        if bound is None or reference is None:
+            return "warning"
+        if not np.isfinite([bound, reference]).all():
+            return "warning"
+        half_width = abs(bound - reference)
+        outside = max(observed - high if low is None else low - observed, 0.0)
+    else:
+        if not np.isfinite([low, high]).all():
+            return "warning"
+        half_width = (high - low) / 2.0
+        outside = max(low - observed, observed - high, 0.0)
     if half_width <= 0:
         return "warning"
-    outside = max(low - observed, observed - high, 0.0)
     return "alert" if outside >= band_multiple * half_width else "warning"
 
 
@@ -115,12 +128,16 @@ class Issue:
     observed: float | None = None
     threshold: list | None = None  # [low, high]; None entries = unbounded
     unit: str | None = None
+    reference: float | None = None  # band centre, when the evaluator has one
     window: list | None = None  # [start_iso, end_iso]
     excursion: Excursion | None = None
     first_seen_run: str | None = None
     rawid: int | None = None
     string: int | None = None
     position: int | None = None
+    # array-level records (see collapse_correlated): who was caught up in it
+    affected_detectors: list | None = None
+    affected_frac: float | None = None
     data_ref: dict | None = None  # {"file": ..., "key": ...}
     raw_ref: dict | None = None  # provenance into the raw LH5 production tree
     plots: list | None = None
@@ -217,6 +234,109 @@ def issues_file_path(output_folder: str, period: str, run: str, datatype: str) -
         run,
         f"l200-{period}-{run}-{datatype}-issues.jsonl",
     )
+
+
+#: a metric failing on at least this fraction of the detectors it was evaluated
+#: on (and on at least MIN_CORRELATED_DETECTORS of them) is one array-wide
+#: event, not that many independent detector problems. Calibrated on p22:
+#: per-detector cal metrics fail on 10-25 % of the array in a normal run, while
+#: the SiPM noise bursts that motivated this hit 34-100 % of the channels.
+CORRELATED_FRACTION = 0.3
+MIN_CORRELATED_DETECTORS = 5
+
+
+def _deviation(issue: "Issue") -> float:
+    """How badly one record violated its band (comparable within a metric)."""
+    if issue.excursion is not None:
+        return issue.excursion.frac_out
+    if issue.observed is None or not issue.threshold:
+        return 0.0
+    low, high = (list(issue.threshold) + [None, None])[:2]
+    return max(
+        low - issue.observed if low is not None else 0.0,
+        issue.observed - high if high is not None else 0.0,
+        0.0,
+    )
+
+
+def collapse_correlated(
+    records: list,
+    evaluated: dict | None = None,
+    subsystems: dict | None = None,
+    *,
+    min_fraction: float = CORRELATED_FRACTION,
+    min_detectors: int = MIN_CORRELATED_DETECTORS,
+    max_plots: int = 6,
+) -> list:
+    """
+    Replace an array-wide failure of one metric with a single array-level record.
+
+    A common-mode event — a noise burst across the SiPMs, a DAQ hiccup — trips
+    the same metric on most of the array at once, and emitting one record per
+    channel buries the signal it carries. Those records collapse into one,
+    keyed on a pseudo-detector (``spms-array``), representing the worst
+    channel and listing the rest in ``affected_detectors``. Metrics that fail
+    on only a few detectors are untouched: those really are independent.
+
+    Parameters
+    ----------
+    records : list
+        ``Issue`` records for one (period, run, datatype).
+    evaluated : dict, optional
+        metric -> number of detectors the metric was evaluated on; the
+        fraction is taken against the number of failures when not given.
+    subsystems : dict, optional
+        metric -> subsystem label used to name the pseudo-detector
+        (``<label>-array``); unlisted metrics collapse onto ``array``.
+    min_fraction, min_detectors : float, int
+        Collapse only above both of these (see CORRELATED_FRACTION).
+    max_plots : int
+        Cap on the figures carried over from the members.
+
+    Returns
+    -------
+    list
+        Records in their original order, with each collapsed group replaced by
+        its array-level record at the position of its first member.
+    """
+    by_metric: dict = {}
+    for record in records:
+        by_metric.setdefault(record.metric, []).append(record)
+
+    collapsed = {}
+    for metric, group in by_metric.items():
+        total = (evaluated or {}).get(metric) or len(group)
+        if len(group) < min_detectors or len(group) < min_fraction * total:
+            continue
+        worst = max(group, key=lambda r: (r.severity == "alert", _deviation(r)))
+        plots = list(dict.fromkeys(p for r in group for p in (r.plots or [])))
+        label = (subsystems or {}).get(metric)
+        collapsed[metric] = dataclasses.replace(
+            worst,
+            detector=f"{label}-array" if label else "array",
+            rawid=None,
+            string=None,
+            position=None,
+            affected_detectors=sorted(r.detector for r in group),
+            affected_frac=round(len(group) / total, 3),
+            first_seen_run=min(r.first_seen_run or r.run for r in group),
+            plots=plots[:max_plots],
+            suggested_action=(
+                f"{len(group)} of {total} detectors failed {metric} in the same "
+                "run: treat as common mode (DAQ, HV, run conditions) rather "
+                "than reviewing channels individually; "
+                f"worst was {worst.detector}"
+            ),
+        )
+
+    out, done = [], set()
+    for record in records:
+        if record.metric not in collapsed:
+            out.append(record)
+        elif record.metric not in done:
+            done.add(record.metric)
+            out.append(collapsed[record.metric])
+    return out
 
 
 def write_issues(path: str, issues: list) -> str:
