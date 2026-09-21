@@ -11,6 +11,7 @@ from the manifest, so the eventual rename (when the v1 writer is retired) is
 transparent.
 """
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -74,6 +75,7 @@ def build_contract_files(
     experiment: str = "l200",
     keys: list | None = None,
     subsystem: str = "geds",
+    last_cycle: str | None = None,
 ) -> str | None:
     """Produce the v2 contract file + manifest for one (period, run, subsystem).
 
@@ -192,7 +194,13 @@ def build_contract_files(
     files = _manifest_files(run_dir, period, run, experiment)
     files[v2_name] = {"keys": sorted(written_keys), "cadences": list(schema.CADENCES)}
     manifest_path = writer.write_manifest(
-        run_dir, period, run, files, package_version=version, experiment=experiment
+        run_dir,
+        period,
+        run,
+        files,
+        package_version=version,
+        experiment=experiment,
+        last_cycle=last_cycle,
     )
     utils.logger.info("v2 contract file written: %s", v2_file)
     return manifest_path
@@ -261,8 +269,23 @@ def refresh_manifest(
     from .._version import version
 
     return writer.write_manifest(
-        run_dir, period, run, files, package_version=version, experiment=experiment
+        run_dir,
+        period,
+        run,
+        files,
+        package_version=version,
+        experiment=experiment,
+        last_cycle=_manifest_last_cycle(run_dir, period, run, experiment),
     )
+
+
+def _manifest_last_cycle(run_dir, period: str, run: str, experiment: str):
+    """Only the producing run knew it, so a re-inventory must carry it over."""
+    path = Path(run_dir) / schema.manifest_name(period, run, experiment)
+    if not path.is_file():
+        return None
+    with open(path) as f:
+        return json.load(f).get("last_cycle")
 
 
 def _manifest_files(run_dir: str, period: str, run: str, experiment: str) -> dict:

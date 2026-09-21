@@ -353,12 +353,24 @@ def _fep_baseline(rows):
     return float(first["mean"]) / (1.0 + float(first["drift_kev"]) / 2039.0)
 
 
-def _build_fep_gain_figure(period, run, detector, string, position, rows):
+def _draw_fep_hist(ax, fig, hist):
+    """Event-count heatmap behind the drift line (the legacy hist2d)."""
+    t_edges = np.unique(np.concatenate([hist["time_lo_s"], hist["time_hi_s"]]))
+    v_edges = np.unique(np.concatenate([hist["value_lo_kev"], hist["value_hi_kev"]]))
+    counts = np.zeros((len(v_edges) - 1, len(t_edges) - 1))
+    ti = np.searchsorted(t_edges, hist["time_lo_s"].to_numpy())
+    vi = np.searchsorted(v_edges, hist["value_lo_kev"].to_numpy())
+    counts[vi, ti] = hist["count"].to_numpy()
+    mesh = ax.pcolormesh(t_edges, v_edges, counts, cmap="Blues")
+    fig.colorbar(mesh, ax=ax, label="Counts")
+
+
+def _build_fep_gain_figure(period, run, detector, string, position, rows, hist=None):
     """Build one detector's FEP gain-stability figure.
 
     Ported from the drawing section of ``calibration.fep_gain_variation``;
-    the raw-event 2D histogram is not reproducible from the binned contract
-    data and is therefore not drawn.
+    the event heatmap is drawn from ``fep_gain_hist2d`` when the contract
+    carries it (runs built before that key have none).
 
     Parameters
     ----------
@@ -384,6 +396,8 @@ def _build_fep_gain_figure(period, run, detector, string, position, rows):
 
     fig, ax = plt.subplots(figsize=(10, 5))
     baseline = _fep_baseline(rows)
+    if hist is not None and not hist.empty:
+        _draw_fep_hist(ax, fig, hist)
     if baseline is not None:
         drift = rows["drift_kev"].astype(float)
         band = rows["std"].astype(float) / baseline * 2039.0
@@ -610,6 +624,7 @@ def plot_fep_gain(
     frame = _read_frame(path, f"fep_gain_stab/{run}", log)
     if frame is None or frame.empty:
         return []
+    hist = _read_frame(path, f"fep_gain_hist2d/{run}", log, warn=False)
     detector_map = _load_detector_map(
         output_folder, period, run, data_type, detector_map, log
     )
@@ -620,7 +635,13 @@ def plot_fep_gain(
             log.warning("no string/position for %s; figure skipped", detector)
             continue
         fig = _build_fep_gain_figure(
-            period, run, detector, string, position, rows.sort_values("time_s")
+            period,
+            run,
+            detector,
+            string,
+            position,
+            rows.sort_values("time_s"),
+            hist=None if hist is None else hist[hist["detector"] == detector],
         )
         pdf_dir = str(Path(output_folder) / period / run / "mtg/pdf" / f"st{string}")
         pdf_name = (

@@ -249,7 +249,10 @@ def _detector_summary_figure(period, run, frame, info, last_cycle):
         ax.text(idx.min(), label_y, f"String {s}", rotation=90)
 
     ax.set_ylabel(info.get("ylabel", ""))
-    ax.set_title(f"{period} {run}")
+    plot_title = info.get("plot_title")
+    ax.set_title(
+        f"{plot_title} - {period} - {run}" if plot_title else f"{period} {run}"
+    )
 
     if info["title"] in ["baseln_stab"]:
         ax.axhline(

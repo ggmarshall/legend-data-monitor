@@ -262,3 +262,16 @@ def test_keyed_refresh_restores_a_missing_detector_map(tmp_path, monkeypatch):
     manifest = reader.read_manifest(str(run_dir), "p19", "r001")
     keys = manifest["files"]["l200-p19-r001-phy-geds-schema2.hdf"]["keys"]
     assert "detector_map" in keys
+
+
+def test_manifest_keeps_the_last_cycle_across_a_refresh(tmp_path):
+    root, run_dir = _make_v1_file(tmp_path)
+    build.build_contract_files(root, "p19", "r001", last_cycle="20260701T120000Z")
+    assert reader.read_manifest(str(run_dir), "p19", "r001")["last_cycle"] == (
+        "20260701T120000Z"
+    )
+    # a re-inventory only knows what is on disk; it must not drop the cycle
+    build.refresh_manifest(root, "p19", "r001")
+    assert reader.read_manifest(str(run_dir), "p19", "r001")["last_cycle"] == (
+        "20260701T120000Z"
+    )

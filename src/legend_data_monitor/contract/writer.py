@@ -275,14 +275,22 @@ def write_manifest(
     files: dict,
     package_version: str,
     experiment: str = "l200",
+    last_cycle: str | None = None,
 ) -> str:
-    """Write the run manifest. ``files`` maps file name -> {"keys": [...], "cadences": [...]}."""
+    """
+    Write the run manifest.
+
+    ``files`` maps file name -> {"keys": [...], "cadences": [...]};
+    ``last_cycle`` is the newest DAQ cycle key the run was built from, which
+    the figure legends show and plot_run has no other way to know.
+    """
     manifest = {
         "schema_version": schema.SCHEMA_VERSION,
         "package_version": package_version,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "period": period,
         "run": run,
+        "last_cycle": last_cycle,
         "files": files,
         "cadences": list(schema.CADENCES),
         "key_vocabulary": {

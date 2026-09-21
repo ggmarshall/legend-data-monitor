@@ -255,6 +255,7 @@ def auto_run(
             run,
             metadata_path=str(Path(auto_dir_path) / "inputs"),
             data_type=data_type,
+            last_cycle=last_cycle,
         )
         monitoring.write_spms_production_keys(
             phy_folder,
@@ -373,6 +374,7 @@ def auto_run(
             run,
             data_type,
             logger,
+            last_cycle=last_cycle,
         )
         utils.logger.info("...rendered %d figure(s)", len(saved))
 
@@ -542,12 +544,21 @@ SPMS_HEADLINE_PNG_KEYS = [
 ]
 
 
+def _manifest_last_cycle(run_dir: str, period: str, run: str) -> str | None:
+    """Return the run's last DAQ cycle as the build recorded it (None for older manifests)."""
+    try:
+        return contract_reader.read_manifest(run_dir, period, run).get("last_cycle")
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def render_run_plots(
     files_folder: str,
     period: str,
     run: str,
     data_type: str = "phy",
     logger=None,
+    last_cycle: str | None = None,
 ) -> list:
     """Render a run's per-string PNGs from its contract-v2 file.
 
@@ -567,6 +578,8 @@ def render_run_plots(
     # logger; the per-task one when running in the pipeline, else the package's
     logger = logger if logger is not None else utils.logger
     run_dir = str(Path(files_folder) / "generated/plt/hit" / data_type / period / run)
+    if last_cycle is None:
+        last_cycle = _manifest_last_cycle(run_dir, period, run)
     v2_file = str(Path(run_dir) / f"l200-{period}-{run}-{data_type}-geds-schema2.hdf")
     spms_file = v2_file.replace("-geds-schema2.hdf", "-spms-schema2.hdf")
     if not Path(v2_file).is_file() and not Path(spms_file).is_file():
@@ -629,12 +642,29 @@ def render_run_plots(
     saved += qc_plots_mod.plot_classifier_distributions(
         output_folder, period, run, **common
     )
-    saved += summary_plots_mod.plot_ft_summary(output_folder, period, run, **common)
-    saved += summary_plots_mod.plot_event_rate_qc(output_folder, period, run, **common)
+    saved += summary_plots_mod.plot_ft_summary(
+        output_folder, period, run, last_cycle=last_cycle, **common
+    )
+    saved += summary_plots_mod.plot_event_rate_qc(
+        output_folder, period, run, last_cycle=last_cycle, **common
+    )
     for metric in ["TrapemaxCtcCal", "BlStd", "Baseline", "Trapemax"]:
         saved += summary_plots_mod.plot_detector_summary(
-            output_folder, period, run, metric=metric, **common
+            output_folder, period, run, metric=metric, last_cycle=last_cycle, **common
         )
+    # the FEP box summary comes from check_calibration, so it sits in the cal
+    # period file next to the phy one; the PDF still lands in this run's mtg/pdf
+    saved += summary_plots_mod.plot_detector_summary(
+        output_folder,
+        period,
+        run,
+        metric="FEP_variation",
+        detector_map=detector_map,
+        data_type="cal",
+        save_pdf=True,
+        logger=logger,
+        last_cycle=last_cycle,
+    )
     saved += stability_plots.plot_stability_series(output_folder, period, run, **common)
     cal_common = dict(detector_map=detector_map, save_pdf=True, logger=logger)
     saved += stability_plots.plot_fep_gain(output_folder, period, run, **cal_common)
