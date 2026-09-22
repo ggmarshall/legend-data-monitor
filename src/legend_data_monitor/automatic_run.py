@@ -531,6 +531,9 @@ def auto_run(
 # headline (flag, param, unit) triples rendered as per-string PNGs after each
 # contract build; missing keys are skipped so datatype/config changes stay safe.
 # Defined per subsystem in settings/experiment.yaml.
+# periods the escale panels leave out, on both the live and the plot_run path
+ESCALE_EXCLUDE_PERIODS = ["p05", "p10", "p11", "p13", "p15", "p17"]
+
 HEADLINE_PNG_KEYS = [
     tuple(entry) for entry in utils.EXPERIMENT["headline_plots"]["geds"]
 ]
@@ -669,7 +672,9 @@ def render_run_plots(
     cal_common = dict(detector_map=detector_map, save_pdf=True, logger=logger)
     saved += stability_plots.plot_fep_gain(output_folder, period, run, **cal_common)
     saved += calib_plots.plot_psd_stability(output_folder, period, run, **cal_common)
-    saved += calib_plots.plot_escale_panels(output_folder, period, run, **cal_common)
+    saved += calib_plots.plot_escale_panels(
+        output_folder, period, run, exclude_period=ESCALE_EXCLUDE_PERIODS, **cal_common
+    )
     return saved
 
 
@@ -1001,7 +1006,7 @@ def check_calib(
                 period,
                 current_run,
                 detector_status=detector_status,
-                exclude_period=["p05", "p10", "p11", "p13", "p15", "p17"],
+                exclude_period=ESCALE_EXCLUDE_PERIODS,
                 **common,
             )
     else:
