@@ -276,6 +276,11 @@ def test_manifest_keeps_the_last_cycle_across_a_refresh(tmp_path):
     assert reader.read_manifest(str(run_dir), "p19", "r001")["last_cycle"] == (
         "20260701T120000Z"
     )
+    # nor must a keyed rebuild of one key
+    build.build_contract_files(root, "p19", "r001", keys=["IsPulser_Trapemax"])
+    assert reader.read_manifest(str(run_dir), "p19", "r001")["last_cycle"] == (
+        "20260701T120000Z"
+    )
 
 
 def test_physics_classifier_histogram_applies_the_energy_cut(tmp_path):

@@ -238,6 +238,9 @@ def build_contract_files(
 
     files = _manifest_files(run_dir, period, run, experiment)
     files[v2_name] = {"keys": sorted(written_keys), "cadences": list(schema.CADENCES)}
+    # a keyed rebuild does not know the cycle; keep what the full build recorded
+    if last_cycle is None:
+        last_cycle = _manifest_last_cycle(run_dir, period, run, experiment)
     manifest_path = writer.write_manifest(
         run_dir,
         period,
