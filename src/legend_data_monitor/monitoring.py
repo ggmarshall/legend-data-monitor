@@ -212,7 +212,10 @@ def qc_distributions(
         # its target unfiltered too, and pandas' where() needs both shapes to
         # match. Every frame below is passed through the ignore-keys filter
         # right after masking, so nothing survives that should have been dropped
-        mask = store["/IsPhysics_TrapemaxCtcCal"] > 25
+        mask = (
+            store["/IsPhysics_TrapemaxCtcCal"]
+            > utils.EXPERIMENT["qc_physics_min_energy_kev"]
+        )
 
         for par in pars_to_inspect:
             frames = {

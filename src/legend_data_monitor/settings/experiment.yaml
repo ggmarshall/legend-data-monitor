@@ -46,6 +46,10 @@ qc_parameters_evt:
   - geds/quality/is_not_bb_like/is_delayed_discharge
   - geds/quality/is_bb_like
 
+# physics events in the QC classifier views are not-pulser, not-baseline and
+# above this energy (the legacy "~TP, ~FT, E>25 keV" selection)
+qc_physics_min_energy_kev: 25
+
 # pulser spike veto: events whose PULS01ANA rise time falls outside the window
 # are dropped before the gain series is built
 pulser_spike_veto:

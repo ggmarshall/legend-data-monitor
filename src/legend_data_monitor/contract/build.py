@@ -22,6 +22,41 @@ from ..processing import binning
 from . import schema, writer
 
 
+def _physics_classifier_frame(store, key, rename, period, run):
+    """
+    Physics-flag classifier values above the QC energy cut.
+
+    The QC view draws physics classifiers for "~TP, ~FT, E>25 keV" events, so
+    the physics histogram must not include the sub-threshold bulk. The energy
+    pivot of the same v1 file supplies the cut, as it does for the fractions.
+
+    Parameters
+    ----------
+    store : pandas.HDFStore
+        The open v1 file.
+    key : str
+        The ``/IsPhysics_<Classifier>`` key being built.
+    rename : dict
+        rawid -> detector name column mapping.
+    period, run : str
+        Run being built, for the ignore-keys filter.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        The masked frame, or None when the energy pivot is missing.
+    """
+    energy_key = "/IsPhysics_TrapemaxCtcCal"
+    if energy_key not in store:
+        return None
+    mask = store[energy_key] > settings.EXPERIMENT["qc_physics_min_energy_kev"]
+    frame = utils.load_and_filter(store, key, mask=mask)
+    if frame.empty:
+        return None
+    frame.columns = [rename.get(c, str(c)) for c in frame.columns]
+    return writer.apply_remove_keys(frame, period, run)
+
+
 def _camel(param: str) -> str:
     return "".join(word.capitalize() for word in param.split("_"))
 
@@ -164,13 +199,23 @@ def build_contract_files(
             # Fixed +-15 range (classifier values are sigma-like); outliers
             # land in the flow bins, so in-range fractions stay derivable.
             if "Classifier" in rest:
+                hist_frame = frame
+                if flag == "IsPhysics":
+                    hist_frame = _physics_classifier_frame(
+                        store, key, rename, period, run
+                    )
+                    if hist_frame is None:
+                        utils.logger.warning(
+                            "no energy cut possible for %s; skipped", key
+                        )
+                        continue
                 written_keys.append(
                     writer.write_distribution_2d(
                         v2_file,
                         flag,
                         rest,
                         binning.fill_distribution_2d(
-                            frame, n_bins=76, value_range=(-15.0, 15.4)
+                            hist_frame, n_bins=76, value_range=(-15.0, 15.4)
                         ),
                         attrs,
                     )
