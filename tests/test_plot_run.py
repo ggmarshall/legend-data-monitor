@@ -182,3 +182,12 @@ def test_last_cycle_comes_from_the_manifest(tmp_path):
         automatic_run._manifest_last_cycle(str(run_dir), "p22", "r012")
         == "20260101T000000Z"
     )
+
+
+def test_fep_summary_is_only_looked_up_for_phy_runs(tmp_path, caplog):
+    _contract_run(tmp_path, data_type="ssc")
+    saved = automatic_run.render_run_plots(
+        str(tmp_path), "p22", "r012", data_type="ssc"
+    )
+    assert not [p for p in saved if "FEP_gain_stab" in p]
+    assert "detector_summary/FEP_gain_stab" not in caplog.text

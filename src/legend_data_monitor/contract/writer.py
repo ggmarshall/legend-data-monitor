@@ -189,6 +189,15 @@ def write_distribution_2d(
     return key
 
 
+def remove_key(file_path: str, key: str) -> None:
+    """Delete ``key`` from ``file_path`` if both exist."""
+    if not Path(file_path).is_file():
+        return
+    with h5py.File(file_path, "a") as f:
+        if key in f:
+            del f[key]
+
+
 def write_frame(file_path: str, key: str, frame: pd.DataFrame) -> str:
     """Write a small pandas frame (run means, detector map, calib pars)."""
     # same courtesy as write_hist: the period directory may not exist yet

@@ -178,3 +178,30 @@ def test_write_fep_gain_contract_stores_non_empty_cells_with_edges(tmp_path):
     assert (hist["time_hi_s"] - hist["time_lo_s"]).eq(600).all()
     assert (hist["value_lo_kev"] <= 0).all() and (hist["value_hi_kev"] > 0).all()
     assert hist["count"].sum() == computed["hist2d"].sum()
+
+
+def test_a_rewrite_without_heatmap_rows_drops_the_stale_key(tmp_path):
+    import h5py
+
+    timestamps, values = _series(n_bins=3, per_bin=10)
+    computed = calibration.compute_fep_gain_variation(timestamps, values)
+    path = calibration.write_fep_gain_contract(
+        str(tmp_path), "p22", "r012", {"V01234A": computed}
+    )
+    computed["hist2d"] = None  # e.g. a re-run where no bin reaches min_counts
+    calibration.write_fep_gain_contract(
+        str(tmp_path), "p22", "r012", {"V01234A": computed}
+    )
+    with h5py.File(path) as f:
+        assert "fep_gain_hist2d/r012" not in f
+        assert "fep_gain_stab/r012" in f
+
+
+def test_last_event_on_a_bin_edge_lands_in_the_same_bin_twice():
+    # 3 full bins, last event exactly on the 1800 s boundary
+    timestamps = np.concatenate([np.linspace(1, 1799, 30), [1800.0]])
+    values = np.full(timestamps.size, 2614.5)
+    out = calibration.compute_fep_gain_variation(timestamps, values)
+    last_stat_bin = int(out["stats"]["bin"].max())
+    last_hist_bin = int(np.nonzero(out["hist2d"].sum(axis=1))[0].max())
+    assert last_stat_bin == last_hist_bin == 3

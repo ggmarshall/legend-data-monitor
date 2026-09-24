@@ -6,7 +6,17 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import yaml
 
-from . import calibration, core, errors, logs, monitoring, repack, tasks, utils
+from . import (
+    calibration,
+    core,
+    errors,
+    logs,
+    monitoring,
+    repack,
+    save_data,
+    tasks,
+    utils,
+)
 from .contract import build as contract_build
 from .contract import reader as contract_reader
 from .contract import schema as contract_schema
@@ -248,6 +258,10 @@ def auto_run(
 
     def task_build_monitoring_hdf(logger=None):
         files_folder = str(Path(output_folder) / ref_version)
+        run_dir = Path(phy_folder) / period / run
+        for v1_file in sorted(run_dir.glob(f"l200-{period}-{run}-{data_type}-*.hdf")):
+            if not v1_file.name.endswith(("-schema2.hdf", "min.hdf")):
+                save_data.recompute_run_means(str(v1_file))
         monitoring.build_new_files(files_folder, period, run, data_type=data_type)
         contract_build.build_all_contract_files(
             files_folder,
@@ -656,18 +670,19 @@ def render_run_plots(
             output_folder, period, run, metric=metric, last_cycle=last_cycle, **common
         )
     # the FEP box summary comes from check_calibration, so it sits in the cal
-    # period file next to the phy one; the PDF still lands in this run's mtg/pdf
-    saved += summary_plots_mod.plot_detector_summary(
-        output_folder,
-        period,
-        run,
-        metric="FEP_variation",
-        detector_map=detector_map,
-        data_type="cal",
-        save_pdf=True,
-        logger=logger,
-        last_cycle=last_cycle,
-    )
+    # period file next to the phy one; lac/ssc/rdc runs have no such pass
+    if data_type == "phy":
+        saved += summary_plots_mod.plot_detector_summary(
+            output_folder,
+            period,
+            run,
+            metric="FEP_variation",
+            detector_map=detector_map,
+            data_type="cal",
+            save_pdf=True,
+            logger=logger,
+            last_cycle=last_cycle,
+        )
     saved += stability_plots.plot_stability_series(output_folder, period, run, **common)
     cal_common = dict(detector_map=detector_map, save_pdf=True, logger=logger)
     saved += stability_plots.plot_fep_gain(output_folder, period, run, **cal_common)

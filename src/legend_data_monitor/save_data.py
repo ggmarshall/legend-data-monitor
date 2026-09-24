@@ -553,6 +553,51 @@ def get_pivot(
     combined_data.to_hdf(file_path, key=key_name, mode="a", **utils.HDF_COMPRESSION)
 
 
+def recompute_run_means(file_path: str, fraction: float = 0.1) -> int:
+    """
+    Recompute every ``<key>_mean`` and ``<key>_var`` of a finished run.
+
+    The chunked append refreshes the mean at every chunk from whatever the
+    file held at that point, so the final value depended on how the run was
+    split (chunk size, re-processing). Once the run's absolute pivots are
+    complete, the mean is recomputed as documented -- the mean over the first
+    ``fraction`` of the run's time span -- and the % variation from it.
+
+    Parameters
+    ----------
+    file_path : str
+        A complete per-run v1 monitoring file.
+    fraction : float
+        Leading fraction of the run's time span the mean is taken over.
+
+    Returns
+    -------
+    int
+        Number of (mean, variation) pairs rewritten.
+    """
+    with h5py.File(file_path, "r") as f:
+        keys = set(f.keys())
+    done = 0
+    for mean_key in sorted(k for k in keys if k.endswith("_mean")):
+        base = mean_key.removesuffix("_mean")
+        if base not in keys:
+            continue
+        absolute = read_hdf(file_path, key=base)
+        if absolute.empty:
+            continue
+        t0, t1 = absolute.index.min(), absolute.index.max()
+        head = absolute[absolute.index < t0 + (t1 - t0) * fraction]
+        mean = head.mean().to_frame().T.astype("float32")
+        mean.index = absolute.index[:1]
+        mean.to_hdf(file_path, key=mean_key, mode="a", **utils.HDF_COMPRESSION)
+        if f"{base}_var" in keys:
+            var = ((absolute / mean.iloc[0] - 1) * 100).astype("float32")
+            var.to_hdf(file_path, key=f"{base}_var", mode="a", **utils.HDF_COMPRESSION)
+        done += 1
+    utils.logger.debug("...recomputed %d run means in %s", done, file_path)
+    return done
+
+
 def check_existence_and_overwrite(file: str):
     """Check for the existence of a file, and if it exists removes it."""
     if Path(file).exists():

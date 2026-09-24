@@ -738,7 +738,9 @@ def compute_fep_gain_variation(
         (``bins`` x ``FEP_HIST_VALUE_EDGES``), the heatmap behind the figure
         (``None`` without a baseline).
     """
-    bins = np.arange(0, timestamps.max() + bin_size, bin_size)
+    # last edge strictly above the last event, so digitize and histogram2d
+    # agree on its bin even when it sits exactly on a bin boundary
+    bins = np.arange(0, (timestamps.max() // bin_size + 2) * bin_size, bin_size)
     bin_idx = np.digitize(timestamps, bins) - 1  # shift to 0-based
 
     df = pd.DataFrame({"time": timestamps, "value": values, "bin": bin_idx})
@@ -1406,10 +1408,12 @@ def write_fep_gain_contract(
     contract_writer.write_frame(file_path, key, pd.DataFrame(rows))
     utils.logger.debug("...wrote %s to %s", key, file_path)
     hist_rows = _fep_hist_rows(fep_stats)
+    key = f"fep_gain_hist2d/{run}"
     if hist_rows:
-        key = f"fep_gain_hist2d/{run}"
         contract_writer.write_frame(file_path, key, pd.DataFrame(hist_rows))
         utils.logger.debug("...wrote %s to %s", key, file_path)
+    else:
+        contract_writer.remove_key(file_path, key)  # never leave a stale heatmap behind
     return file_path
 
 
