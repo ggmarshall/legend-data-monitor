@@ -30,7 +30,9 @@ def test_mean_is_the_first_tenth_of_the_run(tmp_path):
     assert mean.index[0] == absolute.index[0]
     var = pd.read_hdf(path, key="IsPulser_Baseline_var")
     np.testing.assert_allclose(
-        var[1104000].to_numpy(), (absolute[1104000].to_numpy() / 104.5 - 1) * 100, rtol=1e-5
+        var[1104000].to_numpy(),
+        (absolute[1104000].to_numpy() / 104.5 - 1) * 100,
+        rtol=1e-5,
     )
 
 
