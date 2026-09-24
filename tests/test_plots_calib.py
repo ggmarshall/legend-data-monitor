@@ -119,3 +119,75 @@ def test_psd_pdf_name_and_panels(tmp_path):
 def test_missing_inputs_are_not_fatal(tmp_path):
     assert calib.plot_escale_panels(str(tmp_path), PERIOD, RUN) == []
     assert calib.plot_psd_stability(str(tmp_path), PERIOD, RUN) == []
+
+
+OFFDET = "B00079B"
+
+
+def _run_contract_with_status(root, run, usability):
+    """A run contract holding only the detector map plot_run rebuilds status from."""
+    from legend_data_monitor.contract import writer
+
+    run_dir = root / PERIOD / run
+    run_dir.mkdir(parents=True)
+    writer.write_frame(
+        str(run_dir / f"l200-{PERIOD}-{run}-phy-geds-schema2.hdf"),
+        "detector_map",
+        pd.DataFrame(
+            {
+                "name": [DET, OFFDET],
+                "rawid": [1084803, 1116801],
+                "string": [1, 8],
+                "position": [2, 4],
+                "usability": [usability, "off"],
+            }
+        ),
+    )
+
+
+def test_status_is_rebuilt_from_the_run_contracts(tmp_path):
+    _run_contract_with_status(tmp_path, "r000", "on")
+    _run_contract_with_status(tmp_path, "r001", "ac")
+    status = calib.detector_status_from_contracts(str(tmp_path), PERIOD)
+    assert status == {
+        DET: {"usability": {"p22-r000": "on", "p22-r001": "ac"}},
+        OFFDET: {"usability": {"p22-r000": "off", "p22-r001": "off"}},
+    }
+    assert calib.detector_status_from_contracts(str(tmp_path), "p23") == {}
+
+
+def test_off_detectors_get_their_figure_from_status_alone(tmp_path):
+    """Parity with the legacy pass: an off detector has no escale rows but a panel."""
+    import matplotlib.pyplot as plt
+
+    _run_contract_with_status(tmp_path, "r000", "on")
+    _run_contract_with_status(tmp_path, "r001", "ac")
+    _write_escale(tmp_path)  # DET only
+    detector_map = pd.DataFrame(
+        {"name": [DET, OFFDET], "rawid": [1, 2], "string": [1, 8], "position": [2, 4]}
+    )
+    paths = calib.plot_escale_panels(
+        str(tmp_path), PERIOD, RUN, detector_map=detector_map
+    )
+    assert sorted(os.path.basename(p) for p in paths) == [
+        f"{PERIOD}_string1_pos2_{DET}_ESCALEusability.pdf",
+        f"{PERIOD}_string8_pos4_{OFFDET}_ESCALEusability.pdf",
+    ]
+    # the off detector's figure: usability steps drawn, every metric panel empty
+    status = calib.detector_status_from_contracts(str(tmp_path), PERIOD)
+    frame = pd.DataFrame(
+        columns=["detector", "parameter", "peak", "period_run", "value"]
+    )
+    fig = calib._build_escale_figure(
+        OFFDET,
+        8,
+        frame,
+        ["p22-r000", "p22-r001"],
+        usability=status[OFFDET]["usability"],
+    )
+    # besides the two legend proxies (Thresholds, Mean) there is one step line
+    steps = [ln for ln in fig.axes[0].lines if ln.get_marker() == "o"]
+    assert len(steps) == 1
+    assert list(steps[0].get_ydata()) == [0, 0]  # OFF, OFF
+    assert all(not ax.lines for ax in fig.axes[1:])
+    plt.close(fig)

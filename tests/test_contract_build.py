@@ -1,5 +1,6 @@
 """End-to-end test of contract.build on a synthetic v1 per-run file."""
 
+import h5py
 import numpy as np
 import pandas as pd
 
@@ -262,3 +263,53 @@ def test_keyed_refresh_restores_a_missing_detector_map(tmp_path, monkeypatch):
     manifest = reader.read_manifest(str(run_dir), "p19", "r001")
     keys = manifest["files"]["l200-p19-r001-phy-geds-schema2.hdf"]["keys"]
     assert "detector_map" in keys
+
+
+def test_manifest_keeps_the_last_cycle_across_a_refresh(tmp_path):
+    root, run_dir = _make_v1_file(tmp_path)
+    build.build_contract_files(root, "p19", "r001", last_cycle="20260701T120000Z")
+    assert reader.read_manifest(str(run_dir), "p19", "r001")["last_cycle"] == (
+        "20260701T120000Z"
+    )
+    # a re-inventory only knows what is on disk; it must not drop the cycle
+    build.refresh_manifest(root, "p19", "r001")
+    assert reader.read_manifest(str(run_dir), "p19", "r001")["last_cycle"] == (
+        "20260701T120000Z"
+    )
+    # nor must a keyed rebuild of one key
+    build.build_contract_files(root, "p19", "r001", keys=["IsPulser_Trapemax"])
+    assert reader.read_manifest(str(run_dir), "p19", "r001")["last_cycle"] == (
+        "20260701T120000Z"
+    )
+
+
+def test_physics_classifier_histogram_applies_the_energy_cut(tmp_path):
+    """The QC view's physics curve is E>25 keV only; the other flags are uncut."""
+    from legend_data_monitor.plots.qc import _read_dist2d_group
+
+    run_dir = tmp_path / "generated" / "plt" / "hit" / "phy" / "p19" / "r001"
+    run_dir.mkdir(parents=True)
+    path = str(run_dir / "l200-p19-r001-phy-geds.hdf")
+    rng = np.random.default_rng(0)
+    idx = pd.date_range("2026-07-01", periods=200, freq="20s", tz="UTC")
+    rawids = [1104000, 1104001]
+    cls = pd.DataFrame(rng.normal(0, 1, (200, 2)), index=idx, columns=rawids)
+    cls.index.name = "datetime"
+    energy = pd.DataFrame(
+        np.tile([10.0, 100.0], 100).reshape(200, 1) * [1, 1], index=idx, columns=rawids
+    )
+    energy.index.name = "datetime"
+    for flag in ("All", "IsPhysics"):
+        cls.to_hdf(path, key=f"{flag}_IsValidBlSlopeClassifier", mode="a")
+    energy.to_hdf(path, key="IsPhysics_TrapemaxCtcCal", mode="a")
+    build.build_contract_files(str(tmp_path), "p19", "r001")
+    with h5py.File(str(run_dir / "l200-p19-r001-phy-geds-schema2.hdf")) as f:
+        _, all_counts = _read_dist2d_group(
+            f["hist/All_IsValidBlSlopeClassifier_dist2d"]
+        )
+        _, phy_counts = _read_dist2d_group(
+            f["hist/IsPhysics_IsValidBlSlopeClassifier_dist2d"]
+        )
+    total = lambda per_det: sum(int(c.sum()) for c in per_det.values())  # noqa: E731
+    assert total(all_counts) == 400  # 200 events x 2 detectors
+    assert total(phy_counts) == 200  # only the 100 keV half survives the cut

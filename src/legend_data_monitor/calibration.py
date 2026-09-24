@@ -711,6 +711,10 @@ def check_psd(
         yaml.dump(psd_data, f, sort_keys=False)
 
 
+# y grid of the legacy hist2d (keV at escale); shared with the contract writer
+FEP_HIST_VALUE_EDGES = np.linspace(-10.0, 10.0, 40)
+
+
 def compute_fep_gain_variation(
     timestamps: np.ndarray,
     values: np.ndarray,
@@ -730,9 +734,13 @@ def compute_fep_gain_variation(
     dict
         ``bins`` (edges), ``stats`` (per-bin time/mean/std/count),
         ``baseline`` and ``drift`` (keV at ``escale``; ``None`` when no bin has
-        enough entries to define a baseline).
+        enough entries to define a baseline), and ``hist2d``: event counts on
+        (``bins`` x ``FEP_HIST_VALUE_EDGES``), the heatmap behind the figure
+        (``None`` without a baseline).
     """
-    bins = np.arange(0, timestamps.max() + bin_size, bin_size)
+    # last edge strictly above the last event, so digitize and histogram2d
+    # agree on its bin even when it sits exactly on a bin boundary
+    bins = np.arange(0, (timestamps.max() // bin_size + 2) * bin_size, bin_size)
     bin_idx = np.digitize(timestamps, bins) - 1  # shift to 0-based
 
     df = pd.DataFrame({"time": timestamps, "value": values, "bin": bin_idx})
@@ -750,7 +758,19 @@ def compute_fep_gain_variation(
             else valid_means.iloc[-1]
         )
         drift = (stats["mean"] - baseline) / baseline * escale
-    return {"bins": bins, "stats": stats, "baseline": baseline, "drift": drift}
+    hist2d = None
+    if baseline is not None:
+        norm = (values - baseline) / baseline * escale
+        hist2d, _, _ = np.histogram2d(
+            timestamps, norm, bins=(bins, FEP_HIST_VALUE_EDGES)
+        )
+    return {
+        "bins": bins,
+        "stats": stats,
+        "baseline": baseline,
+        "drift": drift,
+        "hist2d": hist2d,
+    }
 
 
 def fep_gain_variation(
@@ -1387,7 +1407,36 @@ def write_fep_gain_contract(
     key = f"fep_gain_stab/{run}"
     contract_writer.write_frame(file_path, key, pd.DataFrame(rows))
     utils.logger.debug("...wrote %s to %s", key, file_path)
+    hist_rows = _fep_hist_rows(fep_stats)
+    key = f"fep_gain_hist2d/{run}"
+    if hist_rows:
+        contract_writer.write_frame(file_path, key, pd.DataFrame(hist_rows))
+        utils.logger.debug("...wrote %s to %s", key, file_path)
+    else:
+        contract_writer.remove_key(file_path, key)  # never leave a stale heatmap behind
     return file_path
+
+
+def _fep_hist_rows(fep_stats: dict) -> list:
+    """Non-empty cells of every detector's event heatmap, with their bin edges."""
+    rows = []
+    for detector, computed in fep_stats.items():
+        hist = computed.get("hist2d") if computed else None
+        if hist is None:
+            continue
+        t_edges, v_edges = computed["bins"], FEP_HIST_VALUE_EDGES
+        for i, j in zip(*np.nonzero(hist)):
+            rows.append(
+                {
+                    "detector": detector,
+                    "time_lo_s": float(t_edges[i]),
+                    "time_hi_s": float(t_edges[i + 1]),
+                    "value_lo_kev": float(v_edges[j]),
+                    "value_hi_kev": float(v_edges[j + 1]),
+                    "count": int(hist[i, j]),
+                }
+            )
+    return rows
 
 
 def check_calibration_lac_ssc(

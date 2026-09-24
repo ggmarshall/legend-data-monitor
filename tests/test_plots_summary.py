@@ -207,7 +207,25 @@ def test_detector_summary_figure_content():
         assert expected in labels
     assert ax.get_ylim() == (-6.0, 6.0)
     assert ax.get_ylabel() == "FEP gain variation [keV]"
-    assert ax.get_title() == f"{PERIOD} {RUN}"
+    # the settings' plot_title leads, the way upstream draws it
+    assert ax.get_title() == f"{info['plot_title']} - {PERIOD} - {RUN}"
+    plt.close(fig)
+
+
+def test_detector_summary_title_falls_back_without_plot_title():
+    info = {
+        k: v
+        for k, v in utils.MTG_PLOT_INFO["FEP_variation"].items()
+        if k != "plot_title"
+    }
+    fig = summary._detector_summary_figure(PERIOD, RUN, _summary_frame(), info, None)
+    assert fig.axes[0].get_title() == f"{PERIOD} {RUN}"
+    plt.close(fig)
+    fig = summary._detector_summary_figure(
+        PERIOD, RUN, _summary_frame(), info, "20260101T000000Z"
+    )
+    title = fig.axes[0].get_legend().get_title().get_text()
+    assert title == "Last cycle: 20260101T000000Z"
     plt.close(fig)
 
 

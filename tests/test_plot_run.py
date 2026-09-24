@@ -120,3 +120,74 @@ def test_render_run_plots_spms_only_groups_by_barrel_and_position(tmp_path):
     saved = automatic_run.render_run_plots(str(tmp_path), "p22", "r012")
     names = sorted(p.rsplit("/", 1)[-1] for p in saved)
     assert names == ["All_HasAnyNoise_IB_bottom.png", "All_HasAnyNoise_IB_top.png"]
+
+
+def test_render_run_plots_draws_the_fep_summary_from_the_cal_file(tmp_path):
+    """check_calibration writes the FEP box summary next to the phy file."""
+    from legend_data_monitor import monitoring
+
+    run_dir = _contract_run(tmp_path)
+    frame = pd.DataFrame(
+        [
+            {
+                "ged": DETS[0],
+                "string": 1,
+                "pos": 1,
+                "mean": 0.1,
+                "std": 0.05,
+                "min": -0.2,
+                "max": 0.3,
+                "fwhm": 2.5,
+                "usability": "on",
+            },
+            {
+                "ged": DETS[2],
+                "string": 2,
+                "pos": 1,
+                "mean": -0.1,
+                "std": 0.02,
+                "min": -0.3,
+                "max": 0.2,
+                "fwhm": np.nan,
+                "usability": "off",
+            },
+        ]
+    )
+    monitoring.write_detector_summary(
+        str(tmp_path / "generated/plt/hit/phy"),
+        "p22",
+        "r012",
+        "FEP_gain_stab",
+        frame,
+        data_type="cal",
+    )
+    saved = automatic_run.render_run_plots(str(tmp_path), "p22", "r012")
+    fep = [p for p in saved if p.endswith("p22_r012_FEP_gain_stab.pdf")]
+    assert len(fep) == 1
+    assert fep[0].startswith(str(run_dir / "mtg" / "pdf"))
+
+
+def test_last_cycle_comes_from_the_manifest(tmp_path):
+    run_dir = _contract_run(tmp_path)
+    assert automatic_run._manifest_last_cycle(str(run_dir), "p22", "r012") is None
+    writer.write_manifest(
+        str(run_dir),
+        "p22",
+        "r012",
+        {},
+        package_version="test",
+        last_cycle="20260101T000000Z",
+    )
+    assert (
+        automatic_run._manifest_last_cycle(str(run_dir), "p22", "r012")
+        == "20260101T000000Z"
+    )
+
+
+def test_fep_summary_is_only_looked_up_for_phy_runs(tmp_path, caplog):
+    _contract_run(tmp_path, data_type="ssc")
+    saved = automatic_run.render_run_plots(
+        str(tmp_path), "p22", "r012", data_type="ssc"
+    )
+    assert not [p for p in saved if "FEP_gain_stab" in p]
+    assert "detector_summary/FEP_gain_stab" not in caplog.text

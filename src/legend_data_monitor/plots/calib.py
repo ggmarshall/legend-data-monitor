@@ -39,6 +39,46 @@ def _load_detector_map(output_folder, period, run, data_type, logger):
         return None
 
 
+def detector_status_from_contracts(output_folder, period, logger=None):
+    """
+    Rebuild {detector: {"usability": {period_run: status}}} from run contracts.
+
+    The live pass gets this from legend-metadata; plot_run has no production
+    access, but every run contract's detector map records the usability it
+    was built with, so the period's runs together give the same picture.
+
+    Parameters
+    ----------
+    output_folder : str
+        Monitoring root (the folder containing ``<period>/``).
+    period : str
+        Period whose run directories are scanned.
+    logger : logging.Logger, optional
+        Where unreadable maps are reported.
+
+    Returns
+    -------
+    dict
+        Legacy-shaped status dict; empty when no run contract is readable.
+    """
+    status = {}
+    for run_dir in sorted(Path(output_folder, period).glob("r[0-9][0-9][0-9]")):
+        files = sorted(run_dir.glob(f"l200-{period}-{run_dir.name}-*-geds-schema2.hdf"))
+        if not files:
+            continue
+        try:
+            dmap = contract_reader.read_frame(str(files[0]), "detector_map")
+        except (KeyError, OSError):
+            _warn(logger, f"no detector_map readable at {files[0]}")
+            continue
+        if "usability" not in dmap.columns:
+            continue
+        key = f"{period}-{run_dir.name}"
+        for name, usab in zip(dmap["name"], dmap["usability"]):
+            status.setdefault(name, {"usability": {}})["usability"][key] = usab
+    return status
+
+
 def _det_location(detector_map, det_name):
     """Return (string, position) of a detector, or None when not mapped."""
     rows = detector_map[detector_map["name"] == det_name]
@@ -422,10 +462,11 @@ def plot_escale_panels(
         Columns name, rawid, string, position; read from the run contract
         key ``detector_map`` when None.
     detector_status : dict, optional
-        Legacy-shaped {detector: {"usability": {period_run: status}}}; not
-        reconstructible from the escale frame. When given it drives the
-        Usability panel, the status shading and the usable-only means; when
-        None those elements are omitted and means use every valid point.
+        Legacy-shaped {detector: {"usability": {period_run: status}}}; drives
+        the Usability panel, the status shading and the usable-only means.
+        Rebuilt from the period's run contracts when None (see
+        :func:`detector_status_from_contracts`). Detectors known only from
+        their status (off all period, no escale rows) get a figure too.
     exclude_period : list, optional
         Period prefixes to exclude from every panel.
     data_type : str
@@ -458,16 +499,18 @@ def plot_escale_panels(
     if detector_map is None:
         return []
 
+    if detector_status is None:
+        detector_status = detector_status_from_contracts(output_folder, period, logger)
     frame_keys = sorted(frame["period_run"].unique())
     saved = []
-    for det_name in sorted(frame["detector"].unique()):
+    for det_name in sorted(set(frame["detector"]) | set(detector_status)):
         location = _det_location(detector_map, det_name)
         if location is None:
             _warn(logger, f"{det_name} not in detector_map; skipping its figure")
             continue
         string, position = location
-        usability = (detector_status or {}).get(det_name, {}).get("usability")
-        all_keys = sorted(usability.keys()) if usability else frame_keys
+        usability = detector_status.get(det_name, {}).get("usability")
+        all_keys = sorted(set(usability) | set(frame_keys)) if usability else frame_keys
         fig = _build_escale_figure(
             det_name,
             string,

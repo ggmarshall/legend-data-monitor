@@ -11,6 +11,7 @@ from the manifest, so the eventual rename (when the v1 writer is retired) is
 transparent.
 """
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -19,6 +20,41 @@ from .. import utils
 from ..config import settings
 from ..processing import binning
 from . import schema, writer
+
+
+def _physics_classifier_frame(store, key, rename, period, run):
+    """
+    Physics-flag classifier values above the QC energy cut.
+
+    The QC view draws physics classifiers for "~TP, ~FT, E>25 keV" events, so
+    the physics histogram must not include the sub-threshold bulk. The energy
+    pivot of the same v1 file supplies the cut, as it does for the fractions.
+
+    Parameters
+    ----------
+    store : pandas.HDFStore
+        The open v1 file.
+    key : str
+        The ``/IsPhysics_<Classifier>`` key being built.
+    rename : dict
+        rawid -> detector name column mapping.
+    period, run : str
+        Run being built, for the ignore-keys filter.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        The masked frame, or None when the energy pivot is missing.
+    """
+    energy_key = "/IsPhysics_TrapemaxCtcCal"
+    if energy_key not in store:
+        return None
+    mask = store[energy_key] > settings.EXPERIMENT["qc_physics_min_energy_kev"]
+    frame = utils.load_and_filter(store, key, mask=mask)
+    if frame.empty:
+        return None
+    frame.columns = [rename.get(c, str(c)) for c in frame.columns]
+    return writer.apply_remove_keys(frame, period, run)
 
 
 def _camel(param: str) -> str:
@@ -74,6 +110,7 @@ def build_contract_files(
     experiment: str = "l200",
     keys: list | None = None,
     subsystem: str = "geds",
+    last_cycle: str | None = None,
 ) -> str | None:
     """Produce the v2 contract file + manifest for one (period, run, subsystem).
 
@@ -162,13 +199,23 @@ def build_contract_files(
             # Fixed +-15 range (classifier values are sigma-like); outliers
             # land in the flow bins, so in-range fractions stay derivable.
             if "Classifier" in rest:
+                hist_frame = frame
+                if flag == "IsPhysics":
+                    hist_frame = _physics_classifier_frame(
+                        store, key, rename, period, run
+                    )
+                    if hist_frame is None:
+                        utils.logger.warning(
+                            "no energy cut possible for %s; skipped", key
+                        )
+                        continue
                 written_keys.append(
                     writer.write_distribution_2d(
                         v2_file,
                         flag,
                         rest,
                         binning.fill_distribution_2d(
-                            frame, n_bins=76, value_range=(-15.0, 15.4)
+                            hist_frame, n_bins=76, value_range=(-15.0, 15.4)
                         ),
                         attrs,
                     )
@@ -191,8 +238,17 @@ def build_contract_files(
 
     files = _manifest_files(run_dir, period, run, experiment)
     files[v2_name] = {"keys": sorted(written_keys), "cadences": list(schema.CADENCES)}
+    # a keyed rebuild does not know the cycle; keep what the full build recorded
+    if last_cycle is None:
+        last_cycle = _manifest_last_cycle(run_dir, period, run, experiment)
     manifest_path = writer.write_manifest(
-        run_dir, period, run, files, package_version=version, experiment=experiment
+        run_dir,
+        period,
+        run,
+        files,
+        package_version=version,
+        experiment=experiment,
+        last_cycle=last_cycle,
     )
     utils.logger.info("v2 contract file written: %s", v2_file)
     return manifest_path
@@ -261,8 +317,23 @@ def refresh_manifest(
     from .._version import version
 
     return writer.write_manifest(
-        run_dir, period, run, files, package_version=version, experiment=experiment
+        run_dir,
+        period,
+        run,
+        files,
+        package_version=version,
+        experiment=experiment,
+        last_cycle=_manifest_last_cycle(run_dir, period, run, experiment),
     )
+
+
+def _manifest_last_cycle(run_dir, period: str, run: str, experiment: str):
+    """Only the producing run knew it, so a re-inventory must carry it over."""
+    path = Path(run_dir) / schema.manifest_name(period, run, experiment)
+    if not path.is_file():
+        return None
+    with open(path) as f:
+        return json.load(f).get("last_cycle")
 
 
 def _manifest_files(run_dir: str, period: str, run: str, experiment: str) -> dict:

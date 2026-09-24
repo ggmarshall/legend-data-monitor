@@ -154,3 +154,46 @@ def test_png_output_is_written(tmp_path):
     assert pngs, "no png written"
     assert all(os.path.isfile(p) for p in pngs)
     assert not any(p.endswith(".pdf") for p in paths)
+
+
+def _fep_contract(tmp_path, with_hist):
+    """A one-detector FEP contract, with or without the event heatmap key."""
+    t = np.linspace(1, 1199, 40)
+    computed = calibration.compute_fep_gain_variation(t, np.full(40, 2614.5))
+    if not with_hist:
+        computed["hist2d"] = None
+    calibration.write_fep_gain_contract(str(tmp_path), PERIOD, RUN, {DET: computed})
+    return monitoring.period_contract_path(str(tmp_path), PERIOD, "cal")
+
+
+def test_fep_gain_draws_the_heatmap_when_the_contract_has_it(tmp_path):
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import QuadMesh
+
+    path = _fep_contract(tmp_path, with_hist=True)
+    rows = pd.read_hdf(path, key=f"fep_gain_stab/{RUN}")
+    hist = pd.read_hdf(path, key=f"fep_gain_hist2d/{RUN}")
+    fig = stability._build_fep_gain_figure(PERIOD, RUN, DET, 1, 2, rows, hist=hist)
+    meshes = [c for c in fig.axes[0].collections if isinstance(c, QuadMesh)]
+    assert len(meshes) == 1
+    assert meshes[0].get_array().sum() == 40
+    assert len(fig.axes) == 2  # the counts colorbar
+    plt.close(fig)
+
+
+def test_fep_gain_still_renders_older_contracts_without_the_heatmap(tmp_path):
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import QuadMesh
+
+    _fep_contract(tmp_path, with_hist=False)
+    paths = stability.plot_fep_gain(
+        str(tmp_path), PERIOD, RUN, detector_map=_detector_map()
+    )
+    assert len(paths) == 1
+    rows = pd.read_hdf(
+        monitoring.period_contract_path(str(tmp_path), PERIOD, "cal"),
+        key=f"fep_gain_stab/{RUN}",
+    )
+    fig = stability._build_fep_gain_figure(PERIOD, RUN, DET, 1, 2, rows, hist=None)
+    assert not [c for c in fig.axes[0].collections if isinstance(c, QuadMesh)]
+    plt.close(fig)

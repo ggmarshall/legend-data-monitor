@@ -141,3 +141,67 @@ def test_read_dataflow_stability_returns_none_without_a_shelve(tmp_path):
     from legend_data_monitor import calibration as cal
 
     assert cal.read_dataflow_stability(str(tmp_path), "p22", "r012", "V01234A") is None
+
+
+def test_compute_returns_the_event_heatmap():
+    timestamps, values = _series(n_bins=3, per_bin=10, drift_per_bin=1.0)
+    out = calibration.compute_fep_gain_variation(timestamps, values)
+    hist = out["hist2d"]
+    # one row per time bin, the legacy 39 value bins, every event inside the grid
+    assert hist.shape == (3, len(calibration.FEP_HIST_VALUE_EDGES) - 1)
+    assert hist.sum() == 30
+    assert list(hist.sum(axis=1)) == [10, 10, 10]
+
+
+def test_compute_has_no_heatmap_without_a_baseline():
+    timestamps, values = _series(n_bins=2, per_bin=3)
+    assert calibration.compute_fep_gain_variation(timestamps, values)["hist2d"] is None
+
+
+def test_write_fep_gain_contract_stores_non_empty_cells_with_edges(tmp_path):
+    timestamps, values = _series(n_bins=3, per_bin=10)
+    computed = calibration.compute_fep_gain_variation(timestamps, values)
+    path = calibration.write_fep_gain_contract(
+        str(tmp_path), "p22", "r012", {"V01234A": computed}
+    )
+    hist = reader.read_frame(path, "fep_gain_hist2d/r012")
+    assert list(hist.columns) == [
+        "detector",
+        "time_lo_s",
+        "time_hi_s",
+        "value_lo_kev",
+        "value_hi_kev",
+        "count",
+    ]
+    # flat input: all 10 events of a bin fall in the single cell around zero
+    assert len(hist) == 3 and list(hist["count"]) == [10, 10, 10]
+    assert (hist["time_hi_s"] - hist["time_lo_s"]).eq(600).all()
+    assert (hist["value_lo_kev"] <= 0).all() and (hist["value_hi_kev"] > 0).all()
+    assert hist["count"].sum() == computed["hist2d"].sum()
+
+
+def test_a_rewrite_without_heatmap_rows_drops_the_stale_key(tmp_path):
+    import h5py
+
+    timestamps, values = _series(n_bins=3, per_bin=10)
+    computed = calibration.compute_fep_gain_variation(timestamps, values)
+    path = calibration.write_fep_gain_contract(
+        str(tmp_path), "p22", "r012", {"V01234A": computed}
+    )
+    computed["hist2d"] = None  # e.g. a re-run where no bin reaches min_counts
+    calibration.write_fep_gain_contract(
+        str(tmp_path), "p22", "r012", {"V01234A": computed}
+    )
+    with h5py.File(path) as f:
+        assert "fep_gain_hist2d/r012" not in f
+        assert "fep_gain_stab/r012" in f
+
+
+def test_last_event_on_a_bin_edge_lands_in_the_same_bin_twice():
+    # 3 full bins, last event exactly on the 1800 s boundary
+    timestamps = np.concatenate([np.linspace(1, 1799, 30), [1800.0]])
+    values = np.full(timestamps.size, 2614.5)
+    out = calibration.compute_fep_gain_variation(timestamps, values)
+    last_stat_bin = int(out["stats"]["bin"].max())
+    last_hist_bin = int(np.nonzero(out["hist2d"].sum(axis=1))[0].max())
+    assert last_stat_bin == last_hist_bin == 3

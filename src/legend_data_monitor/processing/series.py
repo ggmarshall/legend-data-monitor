@@ -48,7 +48,9 @@ def find_hdf_file(
     exclude: list[str] = None
         List of words that the HDF monitoring file to retrieve must NOT contain.
     """
-    exclude = exclude or []
+    # the contract file shares the subsystem tag but holds no pandas keys, and
+    # "-schema2.hdf" sorts before ".hdf", so it must never be a candidate
+    exclude = [*(exclude or []), "schema2"]
     candidates = [
         f
         for f in sorted(p.name for p in Path(directory).iterdir())

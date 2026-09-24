@@ -304,20 +304,27 @@ def add_auto_run_parser(subparsers):
     parser_auto_run.set_defaults(func=auto_run_cli)
 
 
+def _flag(value) -> bool:
+    """Read a True/False command-line flag; argparse hands it over as a string."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes")
+
+
 def auto_run_cli(args):
     """Pass command line arguments to :func:`.core.auto_run`."""
     cluster = args.cluster
     ref_version = args.ref_version
     output_folder = args.output_folder
-    partition = False if args.partition is False else True
+    partition = _flag(args.partition)
     pswd = args.pswd
-    get_sc = False if args.sc is False else True
+    get_sc = _flag(args.sc)
     port = args.port
     pswd_email = args.pswd_email
     chunk_size = args.chunk_size
     input_period = args.p
     input_run = args.r
-    save_pdf = False if args.pdf is False else True
+    save_pdf = _flag(args.pdf)
     escale_val = args.escale
     data_type = args.data_type
 
